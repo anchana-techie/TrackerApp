@@ -75,8 +75,12 @@ function toast(msg, isErr = false) {
  * State
  * ======================================================= */
 const S = {
-  settings: { scriptUrl: store.get('scriptUrl', ''), passcode: store.get('passcode', '') },
-  sheetUrl: '',
+  user: null,          // signed-in member { uid, userName, email, role }
+  members: [],         // admin only: everyone, for the person picker
+  years: [],           // document_link rows of the person being viewed
+  year: null,
+  viewUid: null,       // whose tracker is on screen (admin can view others, read-only)
+  readOnly: false,
   demo: false,
   data: null,          // raw response of 'read'
   idx: null,           // derived indexes
@@ -101,11 +105,14 @@ S.pending = freshPending();
  * ======================================================= */
 async function api(action, payload = {}) {
   if (S.demo) return demoApi(action, payload);
-  if (!S.settings.scriptUrl) throw new Error('Add your Apps Script URL in Settings first.');
-  const res = await fetch(S.settings.scriptUrl, {
+  const scriptUrl = window.APP_CONFIG?.scriptUrl;
+  if (!scriptUrl) throw new Error('scriptUrl is missing in config.js.');
+  const idToken = await Account.token();
+  const asUid = S.viewUid && S.viewUid !== S.user.uid ? S.viewUid : undefined;
+  const res = await fetch(scriptUrl, {
     method: 'POST',
     // no content-type header => text/plain, so the browser skips the CORS preflight Apps Script can't answer
-    body: JSON.stringify({ action, passcode: S.settings.passcode, sheetUrl: S.sheetUrl, ...payload })
+    body: JSON.stringify({ action, idToken, year: S.year, asUid, ...payload })
   });
   let j;
   try { j = await res.json(); } catch { throw new Error('The script did not return JSON. Check the deployment URL and that access is "Anyone".'); }
@@ -161,15 +168,7 @@ async function demoApi(action, payload) {
  * Loading & indexing
  * ======================================================= */
 async function loadSheet({ quiet = false } = {}) {
-  if (!S.demo) {
-    S.sheetUrl = $('#sheetUrl').value.trim();
-    if (!S.sheetUrl) return;
-    if (!S.settings.scriptUrl || !S.settings.passcode) {
-      switchTab('settings');
-      toast('Add the Apps Script URL and passcode first.', true);
-      return;
-    }
-  }
+  if (!S.demo && !S.year) { toast('Choose a year first, or upload one in the Upload tab.', true); return; }
   const btn = $('#loadBtn');
   btn.disabled = true; btn.textContent = 'Loading…';
   if (!quiet) document.body.classList.add('loading');
@@ -177,7 +176,8 @@ async function loadSheet({ quiet = false } = {}) {
     const data = await api('read');
     S.data = data;
     buildIndex();
-    if (!S.demo) rememberSheet(S.sheetUrl, data.title);
+    S.readOnly = !S.demo && S.viewUid !== S.user.uid;
+    document.body.classList.toggle('readonly', S.readOnly);
     $$('[data-sheet-title]').forEach(e => { e.textContent = (S.demo ? 'Demo · ' : '') + data.title; });
     $$('[data-empty]').forEach(e => { e.hidden = true; });
     $$('[data-ready]').forEach(e => { e.hidden = false; });
@@ -225,24 +225,16 @@ function clampDate(k) {
   return k;
 }
 
-function rememberSheet(url, title) {
-  const list = store.get('recent', []).filter(r => r.url !== url);
-  list.unshift({ url, title });
-  store.set('recent', list.slice(0, 6));
-  store.set('lastSheet', url);
-  fillRecent();
-}
-function fillRecent() {
-  const dl = $('#recentSheets');
-  fill(dl, ...store.get('recent', []).map(r => h('option', { value: r.url }, r.title)));
-}
-
 function showBanner() {
   const b = $('#banner');
   const missing = ['products', 'dos', 'habits', 'period', 'weight', 'buy'].filter(k => !S.data.sheets[k]);
   if (S.demo) {
     b.className = 'banner info'; b.hidden = false;
-    b.textContent = 'Demo mode — made-up data, changes stay in this tab. Paste your sheet link above to use your real tracker.';
+    b.textContent = 'Demo mode — made-up data, changes stay in this tab. Pick a year above and press Load to go back to your tracker.';
+  } else if (S.readOnly) {
+    const who = S.members.find(m => m.uid === S.viewUid)?.userName || 'this person';
+    b.className = 'banner info'; b.hidden = false;
+    b.textContent = `Viewing ${who}'s ${S.year} tracker — read-only.`;
   } else if (missing.length) {
     b.className = 'banner'; b.hidden = false;
     b.textContent = 'Some sheets were not found in this file: ' + missing.join(', ') + '. Those sections are hidden.';
@@ -257,7 +249,7 @@ function switchTab(tab) {
   $$('.nav-btn').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
   window.scrollTo(0, 0);
   $$('.tab-panel').forEach(p => { p.hidden = p.id !== 'tab-' + tab; });
-  if (S.data) renderTab();
+  if (S.data || ['upload', 'admin', 'settings'].includes(tab)) renderTab();
 }
 function renderAll() { renderTab(); }
 function renderTab() {
@@ -265,6 +257,8 @@ function renderTab() {
   else if (S.tab === 'buy') renderBuy();
   else if (S.tab === 'analysis') renderAnalysis();
   else if (S.tab === 'settings') renderGroupEditor();
+  else if (S.tab === 'upload') renderUpload();
+  else if (S.tab === 'admin') renderAdmin();
 }
 
 /* =========================================================
@@ -584,6 +578,7 @@ function updateSaveBar() {
 }
 
 async function saveAll() {
+  if (S.readOnly) return toast('This is a read-only view.', true);
   const p = S.pending, days = {};
   const day = d => (days[d] ||= { date: d, grid: { products: {}, dos: {}, habits: {} } });
   for (const k of ['products', 'dos', 'habits']) {
@@ -699,6 +694,7 @@ function buyRow(it, i) {
 function markBuyDirty() { S.buyDirty = true; $('#buyDirty').hidden = false; }
 
 async function doMarkBought(product, date, bought) {
+  if (S.readOnly) return toast('This is a read-only view.', true);
   if (!date) return toast('Pick the date you bought it.', true);
   try {
     await api('markBought', { product, date, bought });
@@ -710,6 +706,7 @@ async function doMarkBought(product, date, bought) {
 }
 
 async function saveBuy() {
+  if (S.readOnly) return toast('This is a read-only view.', true);
   const d = S.buyDraft;
   const items = d.items.filter(i => i.product.trim()).map(i => ({ product: i.product.trim(), cost: i.cost === '' ? '' : Number(i.cost) }));
   const payload = { month: d.month, items, budget: d.budget === '' ? '' : Number(d.budget) };
@@ -1482,13 +1479,157 @@ function makeDemoData() {
 /* =========================================================
  * Wiring
  * ======================================================= */
-function init() {
-  fillRecent();
-  const params = new URLSearchParams(location.search);
-  $('#sheetUrl').value = params.get('sheet') || store.get('lastSheet', '');
-  $('#scriptUrl').value = S.settings.scriptUrl;
-  $('#passcode').value = S.settings.passcode;
+/* =========================================================
+ * ACCOUNT — sign in, years, upload, admin
+ * ======================================================= */
+const confirmDiscard = () => !(pendingCount() || S.buyDirty) || confirm('Discard unsaved changes?');
 
+function setAuthMsg(msg, isErr = true) {
+  const m = $('#authMsg');
+  m.textContent = msg || '';
+  m.classList.toggle('err', !!msg && isErr);
+}
+
+function showAuth(msg) {
+  $('#appRoot').hidden = true; $('#authScreen').hidden = false;
+  setAuthMsg(msg);
+}
+
+function clearSheet() {
+  S.data = null; S.idx = null; S.readOnly = false;
+  document.body.classList.remove('readonly');
+  $$('[data-empty]').forEach(e => { e.hidden = false; });
+  $$('[data-ready]').forEach(e => { e.hidden = true; });
+  $$('[data-sheet-title]').forEach(e => { e.textContent = 'No sheet loaded'; });
+  $('#banner').hidden = true;
+  destroyCharts();
+}
+
+/** Called by Account whenever the signed-in person changes. */
+async function onAuthChange(profile, msg) {
+  if (!profile) {
+    Object.assign(S, { user: null, members: [], years: [], year: null, viewUid: null, demo: false, pending: freshPending(), buyDraft: null, buyDirty: false });
+    clearSheet();
+    showAuth(msg);
+    return;
+  }
+  S.user = profile; S.viewUid = profile.uid;
+  $('#authScreen').hidden = true; $('#appRoot').hidden = false; setAuthMsg('');
+  $$('[data-user-label]').forEach(e => { e.textContent = profile.userName + (profile.role === 'admin' ? ' · admin' : ''); });
+  $('#accountInfo').textContent = `Signed in as ${profile.userName} (${profile.email})`;
+  const admin = profile.role === 'admin';
+  $('#navAdmin').hidden = !admin;
+  S.members = [];
+  if (admin) { try { S.members = await Account.listMembers(); } catch (err) { toast(err.message, true); } }
+  fillUserSelect();
+  await refreshYears();
+  if (S.year) { await loadSheet(); switchTab('log'); } else { clearSheet(); switchTab('upload'); }
+}
+
+function fillUserSelect() {
+  const sel = $('#userSelect'), show = S.user.role === 'admin' && S.members.length > 0;
+  sel.hidden = !show; $('#userIcon').hidden = !show;
+  fill(sel, ...S.members.map(m => h('option', { value: m.uid }, m.uid === S.user.uid ? `Me (${m.userName})` : m.userName)));
+  sel.value = S.viewUid;
+}
+
+/** Loads the year list of whoever is on screen and fills the year picker. */
+async function refreshYears(preferred) {
+  try { S.years = await Account.listYears(S.viewUid); } catch (err) { S.years = []; toast(err.message, true); }
+  const ys = S.years.map(r => r.year);
+  S.year = [preferred, S.year, new Date().getFullYear(), ys[ys.length - 1]].find(y => ys.includes(y)) || null;
+  const sel = $('#yearSelect');
+  fill(sel, ...(ys.length ? ys.map(y => h('option', { value: y }, y)) : [h('option', { value: '' }, 'No files yet')]));
+  sel.value = S.year || '';
+  sel.disabled = !ys.length;
+}
+
+async function viewPerson(uid) {
+  S.viewUid = uid; S.demo = false;
+  await refreshYears();
+  if (!S.year) { clearSheet(); toast('Nothing has been uploaded for this person yet.'); return; }
+  await loadSheet();
+  switchTab(['log', 'buy', 'analysis'].includes(S.tab) ? S.tab : 'log');
+}
+
+const fileToBase64 = file => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result).split(',')[1]);
+  r.onerror = () => reject(new Error('Could not read that file.'));
+  r.readAsDataURL(file);
+});
+
+async function renderUpload() {
+  const box = $('#myYears');
+  try {
+    const rows = await Account.listYears(S.user.uid);
+    fill(box, rows.length
+      ? h('div', { class: 'rows' }, rows.map(r => h('div', { class: 'row' }, h('b', null, r.year),
+        h('span', { class: 'muted' }, r.uploadedAt?.toDate ? 'uploaded ' + r.uploadedAt.toDate().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''))))
+      : h('p', { class: 'sub' }, 'Nothing uploaded yet.'));
+  } catch (err) { fill(box, h('p', { class: 'sub err' }, err.message)); }
+}
+
+async function doUpload(e) {
+  e.preventDefault();
+  const st = $('#uploadStatus'), btn = $('#uploadBtn');
+  const year = Number($('#uploadYear').value), file = $('#uploadFile').files[0];
+  const problem = m => { st.textContent = m; st.className = 'sub err'; };
+  st.className = 'sub';
+  if (!file) return problem('Choose an Excel file.');
+  if (!/\.xlsx$/i.test(file.name)) return problem('Please choose an .xlsx file.');
+  if (file.size > 10 * 1024 * 1024) return problem('That file is larger than 10 MB.');
+  if (!confirmDiscard()) return;
+  btn.disabled = true; st.textContent = 'Checking…';
+  try {
+    if ((await Account.listYears(S.user.uid)).some(r => r.year === year)) return problem(`${year} has already been uploaded and cannot be replaced.`);
+    st.textContent = 'Uploading and converting to Google Sheets — this can take up to a minute…';
+    S.demo = false;
+    await api('upload', { year, data: await fileToBase64(file) });
+    e.target.reset(); st.textContent = '';
+    toast(`${year} uploaded`);
+    S.viewUid = S.user.uid; fillUserSelect();
+    await refreshYears(year);
+    await loadSheet();
+    switchTab('log');
+  } catch (err) { problem(err.message); }
+  finally { btn.disabled = false; }
+}
+
+async function removeYear(member, year) {
+  if (!confirm(`Remove ${year} for ${member.userName}?\n\nTheir Google Sheet stays in Drive, but they will be able to upload ${year} again.`)) return;
+  try {
+    await Account.removeLink(member.uid, year);
+    toast('Removed');
+    if (S.viewUid === member.uid) { await refreshYears(); if (S.year) await loadSheet(); else clearSheet(); }
+    renderAdmin();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function renderAdmin() {
+  const memberBox = $('#memberList'), inviteBox = $('#inviteList');
+  try {
+    const [members, invites] = await Promise.all([Account.listMembers(), Account.listInvites()]);
+    const years = await Promise.all(members.map(m => Account.listYears(m.uid)));
+    S.members = members; fillUserSelect();
+    const driveHref = l => (/^https:\/\/docs\.google\.com\//.test(l) ? l : null);
+    fill(memberBox, ...members.map((m, i) => h('div', { class: 'row member' },
+      h('div', { class: 'who' }, h('b', null, m.userName), m.role === 'admin' ? h('span', { class: 'pill' }, 'admin') : null, h('div', { class: 'muted' }, m.email)),
+      h('div', { class: 'years' }, years[i].length
+        ? years[i].map(r => h('span', { class: 'year-tag' }, r.year,
+          driveHref(r.driveLink) ? h('a', { href: driveHref(r.driveLink), target: '_blank', rel: 'noopener', title: 'Open in Google Drive', 'aria-label': `Open ${r.year} in Google Drive` }, icon('external-link')) : null,
+          h('button', { class: 'x', title: 'Remove this year so it can be uploaded again', 'aria-label': `Remove ${r.year}`, onclick: () => removeYear(m, r.year) }, icon('x'))))
+        : h('span', { class: 'muted' }, 'No files yet')),
+      h('button', { class: 'btn small', onclick: () => { $('#userSelect').value = m.uid; viewPerson(m.uid); } }, icon('eye'), 'View'))));
+    fill(inviteBox, ...invites.map(inv => {
+      const joined = members.some(m => m.email === inv.email);
+      return h('div', { class: 'row' }, h('span', null, inv.email), h('span', { class: 'muted' }, joined ? 'registered' : 'waiting'),
+        joined ? null : h('button', { class: 'btn small ghost', onclick: async () => { try { await Account.removeInvite(inv.email); renderAdmin(); } catch (err) { toast(err.message, true); } } }, 'Remove'));
+    }));
+  } catch (err) { fill(memberBox, h('p', { class: 'sub err' }, err.message)); }
+}
+
+function init() {
   $$('.nav-btn').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   applyTheme(store.get('theme', null) || 'auto');
   $$('[data-theme-toggle]').forEach(b => b.addEventListener('click', () => {
@@ -1498,6 +1639,14 @@ function init() {
   }));
   $$('.seg button').forEach(b => b.addEventListener('click', () => { S.mode = b.dataset.mode; renderLog(); }));
   $('#sheetForm').addEventListener('submit', e => { e.preventDefault(); S.demo = false; loadSheet(); });
+  $('#yearSelect').addEventListener('change', e => {
+    if (!confirmDiscard()) { e.target.value = S.year || ''; return; }
+    S.year = Number(e.target.value) || null; S.demo = false; loadSheet();
+  });
+  $('#userSelect').addEventListener('change', e => {
+    if (!confirmDiscard()) { e.target.value = S.viewUid; return; }
+    viewPerson(e.target.value);
+  });
 
   $('#discardBtn').addEventListener('click', () => { S.pending = freshPending(); renderLog(); });
   $('#saveDayBtn').addEventListener('click', saveAll);
@@ -1505,29 +1654,52 @@ function init() {
   $('#addBuyRow').addEventListener('click', () => { S.buyDraft.items.push({ product: '', cost: '' }); markBuyDirty(); renderBuy(); const ins = $$('#buyRows input.p'); ins[ins.length - 1]?.focus(); });
   $('#saveBuyBtn').addEventListener('click', saveBuy);
 
-  $('#saveSettings').addEventListener('click', async () => {
-    S.settings.scriptUrl = $('#scriptUrl').value.trim();
-    S.settings.passcode = $('#passcode').value;
-    store.set('scriptUrl', S.settings.scriptUrl);
-    store.set('passcode', S.settings.passcode);
-    const st = $('#settingsStatus');
-    st.textContent = 'Testing…';
-    const wasDemo = S.demo; S.demo = false;
-    try { await api('ping'); st.textContent = '✓ Connected'; toast('Connected to your script ✓'); }
-    catch (err) { st.textContent = '✗ ' + err.message; S.demo = wasDemo; }
+  // ----- account screens -----
+  $$('[data-auth]').forEach(b => b.addEventListener('click', () => {
+    const reg = b.dataset.auth === 'register';
+    $('#loginForm').hidden = reg; $('#registerForm').hidden = !reg;
+    $$('[data-auth]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    setAuthMsg('');
+  }));
+  $('#loginForm').addEventListener('submit', async e => {
+    e.preventDefault(); setAuthMsg('Signing in…', false);
+    try { await Account.signIn($('#loginEmail').value, $('#loginPassword').value); }
+    catch (err) { setAuthMsg(err.message); }
   });
-  $('#forgetSettings').addEventListener('click', () => {
-    ['scriptUrl', 'passcode', 'recent', 'lastSheet'].forEach(k => store.del(k));
-    S.settings = { scriptUrl: '', passcode: '' };
-    $('#scriptUrl').value = ''; $('#passcode').value = ''; fillRecent();
-    toast('Cleared from this device');
+  $('#forgotBtn').addEventListener('click', async () => {
+    const email = $('#loginEmail').value.trim();
+    if (!email) return setAuthMsg('Type your email above first.');
+    try { await Account.resetPassword(email); setAuthMsg('If that email is registered, a reset link is on its way.', false); }
+    catch (err) { setAuthMsg(err.message); }
+  });
+  $('#registerForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    if ($('#regPassword').value !== $('#regPassword2').value) return setAuthMsg('The two passwords do not match.');
+    setAuthMsg('Creating your account…', false);
+    try { await Account.register({ userName: $('#regUserName').value, email: $('#regEmail').value, password: $('#regPassword').value }); }
+    catch (err) { setAuthMsg(err.message); }
+  });
+  $('#pwForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const st = $('#pwStatus');
+    if ($('#pwNew').value !== $('#pwNew2').value) { st.textContent = 'The two new passwords do not match.'; return; }
+    st.textContent = 'Changing…';
+    try { await Account.changePassword($('#pwCur').value, $('#pwNew').value); e.target.reset(); st.textContent = '✓ Password changed'; toast('Password changed'); }
+    catch (err) { st.textContent = '✗ ' + err.message; }
+  });
+  $('#signOutBtn').addEventListener('click', () => { if (confirmDiscard()) Account.signOut(); });
+  $('#uploadForm').addEventListener('submit', doUpload);
+  $('#inviteForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    try { await Account.addInvite($('#inviteEmail').value); e.target.reset(); toast('Invited'); renderAdmin(); }
+    catch (err) { toast(err.message, true); }
   });
   $('#demoBtn').addEventListener('click', () => { S.demo = true; S.data = null; loadSheet().then(() => switchTab('log')); });
 
   window.addEventListener('beforeunload', e => { if (pendingCount() || S.buyDirty) { e.preventDefault(); e.returnValue = ''; } });
 
-  if (!S.settings.scriptUrl) switchTab('settings');
-  else if ($('#sheetUrl').value) loadSheet();
+  if (!Account.configured()) return showAuth('Setup needed: fill in config.js (see README).');
+  Account.init(onAuthChange);   // shows the sign-in screen or the app once Firebase answers
 }
 
 document.addEventListener('DOMContentLoaded', init);

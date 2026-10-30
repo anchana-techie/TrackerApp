@@ -1,24 +1,29 @@
 /**
  * Life Tracker bridge — Google Apps Script
  * ------------------------------------------------------------
- * Sits between the GitHub Pages site and your Google Sheet.
- * The page sends the sheet link + your passcode; this script
- * reads / writes the sheet and returns JSON.
+ * Sits between the GitHub Pages site, Firebase and Google Drive.
  *
- * Setup (once):
- *   1. script.google.com → New project → paste this file as Code.gs
- *   2. Project Settings → Script properties → add  PASSCODE = <your secret>
- *   3. Deploy → New deployment → Web app
- *        Execute as: Me      Who has access: Anyone
- *   4. Copy the /exec URL into the site's Settings tab.
+ *  - The page sends the signed-in user's Firebase ID token (never a sheet link).
+ *  - This script verifies the token, then reads Firestore *as that user*, so the
+ *    Firestore security rules decide who may see which year file.
+ *  - Only this script writes document_link rows (as the project owner); browsers cannot.
+ *  - Uploaded .xlsx files are converted to Google Sheets inside
+ *      MASTER_FOLDER / <UserName> / <Year>
+ *    and the file id + link are written to Firestore (collection document_link).
  *
- * Works with any tracker file that has the same layout
- * (2026, 2027, …) — sheets are found by name prefix, dates by value.
+ * Script properties (Project Settings -> Script properties):
+ *   MASTER_FOLDER_ID     id of the Drive folder that holds one sub-folder per user
+ *   FIREBASE_PROJECT_ID  Firebase project id
+ *   FIREBASE_API_KEY     Firebase web API key (same one as in config.js)
+ *
+ * Needs the Advanced Drive service (Services -> Drive API, v3). See README.
  */
 
 var BUY_SETTINGS = 'Buy Settings';
 var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
   'August', 'September', 'October', 'November', 'December'];
+var XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+var MAX_UPLOAD_B64 = 14000000;   // ~10 MB of file
 
 // ---------- entry points ----------
 
@@ -34,27 +39,30 @@ function doPost(e) {
     return json_({ ok: false, error: 'Bad request body.' });
   }
 
-  var expected = PropertiesService.getScriptProperties().getProperty('PASSCODE');
-  if (!expected) return json_({ ok: false, error: 'PASSCODE is not set in Script properties.' });
-  if (String(req.passcode || '') !== expected) return json_({ ok: false, error: 'Wrong passcode.' });
-
   try {
-    if (req.action === 'ping') return json_({ ok: true });
+    var auth = authenticate_(req.idToken);
+    if (req.action === 'ping') return json_({ ok: true, data: { uid: auth.uid } });
 
-    var ss = openSheet_(req.sheetUrl);
     var lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
       var result;
-      switch (req.action) {
-        case 'read':         result = readAll_(ss); break;
-        case 'saveDay':      result = saveDay_(ss, req); break;
-        case 'saveDays':     result = saveDays_(ss, req); break;
-        case 'saveBuyList':  result = saveBuyList_(ss, req); break;
-        case 'markBought':   result = markBought_(ss, req); break;
-        default: throw new Error('Unknown action: ' + req.action);
+      if (req.action === 'upload') {
+        result = upload_(auth, req);
+      } else {
+        var target = resolveFile_(auth, req);
+        if (target.readOnly && req.action !== 'read') throw new Error('This is a read-only view.');
+        var ss = SpreadsheetApp.openById(target.fileId);
+        switch (req.action) {
+          case 'read':         result = readAll_(ss); break;
+          case 'saveDay':      result = saveDay_(ss, req); break;
+          case 'saveDays':     result = saveDays_(ss, req); break;
+          case 'saveBuyList':  result = saveBuyList_(ss, req); break;
+          case 'markBought':   result = markBought_(ss, req); break;
+          default: throw new Error('Unknown action: ' + req.action);
+        }
+        SpreadsheetApp.flush();
       }
-      SpreadsheetApp.flush();
       return json_({ ok: true, data: result });
     } finally {
       lock.releaseLock();
@@ -71,11 +79,167 @@ function json_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function openSheet_(url) {
-  url = String(url || '').trim();
-  if (!url) throw new Error('No sheet link was sent. Paste your Google Sheet link in Settings.');
-  var m = url.match(/\/d\/([a-zA-Z0-9_-]{20,})/);
-  return m ? SpreadsheetApp.openById(m[1]) : SpreadsheetApp.openById(url);
+function prop_(name) {
+  var v = PropertiesService.getScriptProperties().getProperty(name);
+  if (!v) throw new Error(name + ' is not set in Script properties.');
+  return v;
+}
+
+// ---------- Firebase: sign-in check + Firestore (as the signed-in user) ----------
+
+/** Verifies the Firebase ID token with Google and returns { uid, token }. */
+function authenticate_(token) {
+  token = String(token || '');
+  if (!token) throw new Error('Please sign in.');
+  var cache = CacheService.getScriptCache();
+  var key = 'a_' + Utilities.base64EncodeWebSafe(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token));
+  var uid = cache.get(key);
+  if (!uid) {
+    var res = UrlFetchApp.fetch(
+      'https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' + encodeURIComponent(prop_('FIREBASE_API_KEY')), {
+        method: 'post', contentType: 'application/json',
+        payload: JSON.stringify({ idToken: token }), muteHttpExceptions: true
+      });
+    var body = JSON.parse(res.getContentText() || '{}');
+    if (res.getResponseCode() !== 200 || !body.users || !body.users.length) {
+      throw new Error('Your session has expired. Please sign in again.');
+    }
+    uid = body.users[0].localId;
+    cache.put(key, uid, 300);
+  }
+  return { uid: uid, token: token };
+}
+
+function fsBase_() {
+  return 'https://firestore.googleapis.com/v1/projects/' + encodeURIComponent(prop_('FIREBASE_PROJECT_ID')) +
+    '/databases/(default)/documents/';
+}
+
+/** GET a Firestore document with the user's own token, so security rules apply. null when missing. */
+function fsGet_(path, token) {
+  var res = UrlFetchApp.fetch(fsBase_() + path, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+  var code = res.getResponseCode();
+  if (code === 404) return null;
+  if (code === 401 || code === 403) throw new Error('You do not have access to that.');
+  if (code !== 200) throw new Error('Database error (' + code + ').');
+  return JSON.parse(res.getContentText());
+}
+
+/**
+ * Creates a document as the script owner (project owner access, which bypasses the security rules).
+ * Only this script may write document_link rows — browsers cannot — so nobody can point their row at
+ * someone else's file. Fails if the id already exists, which is what blocks re-uploading a year.
+ */
+function fsCreate_(collection, docId, fields) {
+  var res = UrlFetchApp.fetch(fsBase_() + collection + '?documentId=' + encodeURIComponent(docId), {
+    method: 'post', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), 'X-Goog-User-Project': prop_('FIREBASE_PROJECT_ID') },
+    payload: JSON.stringify({ fields: fields }), muteHttpExceptions: true
+  });
+  var code = res.getResponseCode();
+  if (code === 409) throw new Error('That year has already been uploaded.');
+  if (code !== 200) throw new Error('Could not save the file link (' + code + '). Check the setup steps in the README.');
+}
+
+function fsStr_(doc, name) {
+  var f = doc && doc.fields && doc.fields[name];
+  return f && f.stringValue !== undefined ? f.stringValue : '';
+}
+
+function getMember_(auth) {
+  var doc = fsGet_('members/' + auth.uid, auth.token);
+  if (!doc) throw new Error('Your account is not set up. Please sign out and register again.');
+  return { userName: fsStr_(doc, 'userName'), role: fsStr_(doc, 'role') };
+}
+
+function parseYear_(v) {
+  var y = Number(v);
+  if (!isFinite(y) || y !== Math.floor(y) || y < 2000 || y > 2100) throw new Error('Choose a valid year.');
+  return y;
+}
+
+/**
+ * Finds the Drive file for the request. Own file by default; an admin may pass asUid
+ * to look at someone else's file (read-only). The link is read from Firestore with the
+ * caller's token, so the rules — not this code — are the final gate.
+ */
+function resolveFile_(auth, req) {
+  var year = parseYear_(req.year);
+  var target = auth.uid, readOnly = false;
+  if (req.asUid && String(req.asUid) !== auth.uid) {
+    if (getMember_(auth).role !== 'admin') throw new Error('You do not have access to that.');
+    target = String(req.asUid);
+    if (!/^[A-Za-z0-9]{10,40}$/.test(target)) throw new Error('Bad user.');
+    readOnly = true;
+  }
+  var doc = fsGet_('document_link/' + target + '_' + year, auth.token);
+  if (!doc) throw new Error('No file has been uploaded for ' + year + '.');
+  var fileId = fsStr_(doc, 'driveFileId');
+  if (!fileId) throw new Error('The file link is incomplete.');
+  return { fileId: fileId, readOnly: readOnly };
+}
+
+// ---------- upload: xlsx -> Google Sheet in MASTER / UserName ----------
+
+function userFolder_(userName) {
+  var master = DriveApp.getFolderById(prop_('MASTER_FOLDER_ID'));
+  var it = master.getFoldersByName(userName);
+  return it.hasNext() ? it.next() : master.createFolder(userName);
+}
+
+function detectYear_(ss) {
+  var tz = ss.getSpreadsheetTimeZone();
+  var keys = ['dos', 'habits', 'products'];
+  for (var i = 0; i < keys.length; i++) {
+    var sh = findSheet_(ss, SHEETS[keys[i]]);
+    if (!sh) continue;
+    try {
+      var g = parseGrid_(sh, tz);
+      if (g.dates.length) return Number(g.dates[0].slice(0, 4));
+    } catch (err) { /* try the next sheet */ }
+  }
+  throw new Error('This does not look like a tracker file (no Daily Dos / Habits / Products sheet with dates).');
+}
+
+/** req: { year, data: base64 of the .xlsx } */
+function upload_(auth, req) {
+  var year = parseYear_(req.year);
+  var member = getMember_(auth);
+  var linkId = auth.uid + '_' + year;
+  if (fsGet_('document_link/' + linkId, auth.token)) {
+    throw new Error(year + ' has already been uploaded and cannot be replaced.');
+  }
+
+  var b64 = String(req.data || '');
+  if (!b64) throw new Error('No file received.');
+  if (b64.length > MAX_UPLOAD_B64) throw new Error('That file is too large (limit about 10 MB).');
+  var bytes = Utilities.base64Decode(b64);
+  if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4B) throw new Error('Please upload an Excel .xlsx file.');
+
+  var folder = userFolder_(member.userName);
+  var blob = Utilities.newBlob(bytes, XLSX_MIME, String(year) + '.xlsx');
+  var created = Drive.Files.create({
+    name: String(year), mimeType: 'application/vnd.google-apps.spreadsheet', parents: [folder.getId()]
+  }, blob);
+
+  try {
+    var detected = detectYear_(SpreadsheetApp.openById(created.id));
+    if (detected !== year) throw new Error('The dates in this file are for ' + detected + ', not ' + year + '.');
+    var link = 'https://docs.google.com/spreadsheets/d/' + created.id + '/edit';
+    fsCreate_('document_link', linkId, {
+      userId: { stringValue: auth.uid },
+      userName: { stringValue: member.userName },
+      year: { integerValue: String(year) },
+      driveFileId: { stringValue: created.id },
+      driveLink: { stringValue: link },
+      uploadedAt: { timestampValue: new Date().toISOString() }
+    });
+    return { year: year, link: link };
+  } catch (err) {
+    DriveApp.getFileById(created.id).setTrashed(true);   // do not leave an orphan file behind
+    throw err;
+  }
 }
 
 function findSheet_(ss, regex) {

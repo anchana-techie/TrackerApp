@@ -1,62 +1,108 @@
 # 🌸 Life Tracker
 
-A static website (HTML + CSS + JS, no build step) that reads and writes your Google Sheet tracker and shows in-depth analysis. It runs on **GitHub Pages**; a small **Google Apps Script** acts as the bridge to your sheet.
+A static website (HTML + CSS + JS, no build step) with **invite-only accounts**. Each person uploads their yearly Excel tracker; it is converted to a Google Sheet in **your** Google Drive and shown in the site with in-depth analysis. It runs on **GitHub Pages**.
 
 ```
-GitHub Pages site  ──(sheet link + passcode)──▶  Apps Script web app  ──▶  your Google Sheet
-   docs/                                           apps-script/Code.gs
+Browser (GitHub Pages)
+   │  Firebase sign-in  ───────────────▶  Firebase Authentication   (passwords live here, hashed)
+   │  member / year list ──────────────▶  Firestore                 (members, document_link, invites)
+   │  ID token + year ─▶  Apps Script  ─▶  Google Drive / Sheets    (MasterFolder/<UserName>/<Year>)
+                            └─ verifies the token, reads Firestore as that user, writes document_link
 ```
 
 ## What's in the folder
 
-| Path | What it is |
+| File | What it is |
 |---|---|
-| `docs/index.html`, `docs/style.css`, `docs/app.js` | The website. GitHub Pages serves this folder. |
-| `apps-script/Code.gs` | The bridge. Paste into Google Apps Script. |
-| `2027 Tracker.xlsx` | Next year's workbook, same layout as 2026 plus the **Buy Settings** sheet. |
+| `index.html`, `style.css`, `app.js` | The website. |
+| `account.js` | Firebase sign-in, registration, change password, Firestore reads. |
+| `config.js` | **You fill this in:** Apps Script URL + Firebase web config. |
+| `Code.gs`, `appsscript.json` | The Apps Script bridge (Drive upload + Sheet reads/writes). |
+| `firestore.rules` | Security rules — the rules are what stop people seeing each other's files. |
+
+## How it works
+
+- **Invite-only.** The admin (you) adds an email under **Admin → Invite**. Only that email can register; the person picks a **username** (3–30 letters/numbers/`_`/`-`), which can never be changed. Usernames are unique.
+- **Upload.** On **Upload**, a person picks a year and an `.xlsx`. The script converts it to a Google Sheet at `MasterFolder/<UserName>/<Year>` and records it in Firestore. The file must really contain that year's dates.
+- **One upload per year.** If 2026 already exists for a person, it cannot be uploaded again. A different year is accepted. (The admin can remove a wrong row under **Admin → Members** so the year can be uploaded again.)
+- **Year picker.** The header lists only the years you have uploaded. Pick one and the Today / Buy list / Insights views (Day, Week, Month) show that file.
+- **Privacy.** A person can only open their own files — enforced by Firestore rules *and* by the script, which never accepts a file link from the browser. Drive files are private to your Google account.
+- **Admin view.** The admin gets a person picker in the header and an **Admin** tab: pick anyone and see their Today, Buy list and Insights, **read-only**.
+
+### Firestore tables
+
+| Collection | Document id | Fields |
+|---|---|---|
+| `members` (registration) | Firebase user id | `userName`, `email`, `role` (`user` / `admin`), `createdAt` |
+| `document_link` (fact table) | `<userId>_<year>` | `userId`, `userName`, `year`, `driveFileId`, `driveLink`, `uploadedAt` |
+| `invites` | the email (lower-case) | `email`, `invitedAt` |
+| `usernames` | lower-cased username | `uid` (reserves the name) |
+
+There is **no password column** — Firebase Authentication stores passwords (hashed); duplicating them in a table would only make a leak worse.
 
 ---
 
-## One-time setup (≈10 minutes)
+## One-time setup (≈25 minutes)
 
-### 1. Create the Apps Script bridge
+### 1. Firebase
 
-1. Go to **script.google.com → New project**. Name it `Tracker bridge`.
-2. Delete the sample code and paste the whole of `apps-script/Code.gs`. Save.
-3. **Project Settings (⚙️) → Script properties → Add script property**
-   - Property: `PASSCODE` Value: a secret of your choice (e.g. a long random phrase).
-4. Back in the editor, pick `doGet` in the function dropdown and click **Run** once. Google asks you to authorise:
-   *Review permissions → your account → Advanced → Go to Tracker bridge (unsafe) → Allow.*
-   ("Unsafe" just means Google hasn't reviewed your personal script — it's your own code.)
-5. **Deploy → New deployment → ⚙️ Select type → Web app**
-   - Execute as: **Me**
-   - Who has access: **Anyone**
-   - Click **Deploy** and copy the **Web app URL** (ends in `/exec`).
+1. [console.firebase.google.com](https://console.firebase.google.com) → **Add project** (Analytics not needed).
+2. **Build → Authentication → Get started → Sign-in method → Email/Password → Enable** (leave "Email link" off).
+3. **Build → Firestore Database → Create database** → production mode → pick a region near you.
+4. Firestore → **Rules** tab → paste the whole of `firestore.rules` → **Publish**.
+5. **Project settings (⚙️) → Your apps → `</>` Web** → register an app → copy the `firebaseConfig` values into `config.js` (`apiKey`, `authDomain`, `projectId`, `appId`).
+6. Authentication → **Settings → Authorized domains** → add your GitHub Pages domain, e.g. `anchana-techie.github.io` (`localhost` is there already).
 
-> One script works for **every** tracker file you own — 2026, 2027, … — because the page sends the sheet link with each request.
+### 2. The master folder in Google Drive
 
-**When you change `Code.gs` later:** Deploy → Manage deployments → ✏️ Edit → Version: *New version* → Deploy. This keeps the same URL.
+This is the folder that will hold one sub-folder per person: `MasterFolder/Person1/2026`, `MasterFolder/Person2/2027`, …
 
-### 2. Publish the site on GitHub Pages
+1. Open [drive.google.com](https://drive.google.com) signed in as the Google account that will own everything.
+2. **New → New folder** → name it (e.g. `LifeTrackerFiles`). This is *FolderName*.
+3. Open the folder. The address bar looks like `https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz` — the part after `/folders/` is the **folder id**. Copy it.
+4. **Do not create the person folders or year files yourself** — the script creates `MasterFolder/<UserName>/` the first time that person uploads, and names each file with its year. Do not share this folder with anyone.
 
-1. Create a repo, e.g. `anchana-techie/life-tracker`.
-2. Upload this whole folder (or at least `docs/`) to the `main` branch.
-3. Repo **Settings → Pages → Build and deployment**
-   Source: *Deploy from a branch* · Branch: `main` · Folder: `/docs` → **Save**.
-4. After a minute the site is live at `https://anchana-techie.github.io/life-tracker/`.
+### 3. The Apps Script bridge
 
-### 3. Connect the site
+1. [script.google.com](https://script.google.com) → **New project** → name it `Tracker bridge`.
+2. Paste the whole of `Code.gs` into `Code.gs`.
+3. **Project Settings (⚙️) → tick "Show appsscript.json manifest file in editor"** → open `appsscript.json` in the editor and replace its contents with the repo's `appsscript.json`. (This enables the Drive service and the permissions the script needs.)
+4. **Project Settings → Script properties → Add** three properties:
+   - `MASTER_FOLDER_ID` = the folder id from step 2
+   - `FIREBASE_PROJECT_ID` = your Firebase project id (same as `projectId` in `config.js`)
+   - `FIREBASE_API_KEY` = the `apiKey` from `config.js`
+5. Pick any function (e.g. `doGet`) and click **Run** once. Authorise: *Review permissions → your account → Advanced → Go to Tracker bridge (unsafe) → Allow.* ("Unsafe" only means Google has not reviewed your personal script.)
+6. **Deploy → New deployment → Web app** → Execute as **Me**, Who has access **Anyone** → Deploy. Copy the **/exec URL** into `scriptUrl` in `config.js`.
 
-1. Open the site → **Settings** tab.
-2. Paste the **Web app URL** and your **PASSCODE** → **Save & test**. You should see ✓ Connected.
-   (These are stored only in that browser. Use *Forget on this device* on a shared computer.)
+> Use the **same Google account** for the Drive folder, the Apps Script and the Firebase project. The script writes to Firestore with that account's permissions (it must be an Owner of the Firebase project, which it is if you created the project).
+>
+> If an upload ever says *Could not save the file link (403)*: open the Firebase project's linked Google Cloud project, and enable the **Cloud Firestore API**.
+
+When you change `Code.gs` later: **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy.** The URL stays the same.
+
+### 4. Publish the site
+
+1. Put this folder in a GitHub repo (with `config.js` filled in) on the `main` branch.
+2. Repo **Settings → Pages** → Source: *Deploy from a branch* → `main` → `/ (root)` → Save.
+3. After a minute it is live at `https://<you>.github.io/<repo>/`.
+
+### 5. Make yourself the admin (once)
+
+1. In the site's **Firebase console → Firestore → Start collection** `invites` → Document id = **your email in lower-case** → add a field `email` (string) with the same value → Save.
+2. Open the site → **Register** with that email and pick your username.
+3. Back in Firestore → `members` → open your document → change `role` from `user` to `admin`. (Roles can only be set here; nobody can make themselves admin from the site.)
+4. Sign out and in again. You now see the **Admin** tab.
+
+### 6. Upload your first year and invite the other person
+
+1. **Upload** tab → year `2026`, choose your `.xlsx` → **Upload**. It appears in Drive as `MasterFolder/<yourUserName>/2026`.
+2. **Admin → Invite** → their email. They register, then upload their own file(s).
 
 ---
 
 ## Everyday use
 
-1. Paste your Google Sheet link (the normal `https://docs.google.com/spreadsheets/d/…/edit` link) at the top → **Load**.
-   Recent links are remembered in the dropdown. You can also bookmark `…/life-tracker/?sheet=<your sheet link>`.
+1. Sign in, then pick the **year** at the top (only years you uploaded are listed). Admins also get a **person** picker.
 2. **Today** — tap a tile to mark it done (tap again to undo). Tiles are grouped into **Morning / Daytime / Evening** (Daily Dos), **Habits**, **Body** (period day + weight) and **Bought today** (this month's buy list first; search to find any product, or add a new one).
    - The week strip at the top jumps between days; each day's ring shows how much you ticked.
    - Switch **Day ↔ Week** to edit a whole week at once in a grid (Daily Dos, Habits, Products, Period).
@@ -97,19 +143,23 @@ Sheets are found by name prefix, so the year in the name can change:
 
 You can rename items, reorder them, or add new rows in the sheet itself — the site picks them up on the next **Load**.
 
-## 2027
-`2027 Tracker.xlsx` has the same layout and colours for Jan–Dec 2027 (your item lists carried over) plus the Buy Settings sheet. Upload it to Google Drive, open it with Google Sheets, then **File → Save as Google Sheets**, and paste that new link into the site. No code changes needed.
-
-## Privacy
-- Your data lives only in your Google Sheet. The site stores nothing on GitHub.
-- The script refuses any request without the right passcode. To change it, edit `PASSCODE` in Script properties, then update it in the site's Settings.
-- The Web app URL + passcode together give access to any sheet your Google account owns, so keep both private.
+## Privacy and security
+- Passwords are handled only by Firebase Authentication. Nothing secret is in the website code — the Firebase web config in `config.js` is public by design; the Firestore rules protect the data.
+- The browser never sends a sheet link. The script verifies the Firebase sign-in, looks up *that person's* `document_link` row (Firestore applies the rules as that person), and only then opens the file. Browsers cannot create or edit `document_link` rows — only the script can — so nobody can point their row at someone else's file.
+- Drive files stay private to your Google account; people reach them only through the site.
+- The admin view is read-only: the script refuses every save action for another person's file.
 
 ## Troubleshooting
 | Message | Fix |
 |---|---|
-| *Wrong passcode* | Match the site's passcode with Script properties → `PASSCODE`. |
-| *The script did not return JSON* | Use the `/exec` URL, and make sure the deployment's access is **Anyone**. |
-| *… is not a column in "…"* | That date isn't in the sheet (e.g. a 2027 date on the 2026 file). |
-| *You do not have permission / Unexpected error … openById* | The sheet belongs to a different Google account from the one that deployed the script. |
-| Changes in `Code.gs` not taking effect | Deploy a **New version** (see step 1). |
+| *Setup needed: fill in config.js* | Fill `scriptUrl` and the `firebase` values, then reload. |
+| *This email has not been invited* | Admin → Invite that exact email, then register again. |
+| *That username is taken* | Usernames are unique (not case-sensitive). Pick another. |
+| *Your session has expired* | Sign in again. |
+| *`FIREBASE_API_KEY` / `MASTER_FOLDER_ID` is not set* | Add the Script properties (setup step 3). |
+| *Drive is not defined* | Enable the Drive service: use the repo's `appsscript.json` (setup step 3.3) or **Services (+) → Drive API → v3**. |
+| *The script did not return JSON* | Use the `/exec` URL and set the deployment's access to **Anyone**. |
+| *Could not save the file link (403)* | Use the same Google account for Firebase and Apps Script; enable the Cloud Firestore API in the linked Cloud project. |
+| *The dates in this file are for 2027, not 2026* | The year you typed must match the dates inside the file. |
+| *This does not look like a tracker file* | The workbook needs a Daily Dos / Habits / Products sheet with a row of dates. |
+| Changes in `Code.gs` not taking effect | Deploy a **New version** (setup step 3). |

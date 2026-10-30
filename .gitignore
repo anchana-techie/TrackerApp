@@ -1,0 +1,19 @@
+# NOTE: config.js is deliberately NOT ignored - GitHub Pages must serve it.
+# It holds only the public Firebase web config and the Apps Script URL.
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# local tooling
+.claude/
+node_modules/
+*.log
+
+# anything that could hold real secrets
+.env
+.env.*
+serviceAccount*.json
+*-firebase-adminsdk-*.json

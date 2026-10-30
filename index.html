@@ -17,10 +17,45 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons-outline.min.css">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" defer></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" defer></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js" defer></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" defer></script>
+  <script src="config.js" defer></script>
+  <script src="account.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
-<div class="app">
+<!-- SIGN IN / REGISTER -->
+<div class="auth" id="authScreen" hidden>
+  <div class="card auth-card">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"><i class="ti ti-check"></i></span>
+      <div class="brand-name">Life Tracker</div>
+    </div>
+    <div class="auth-tabs" role="group" aria-label="Account">
+      <button type="button" data-auth="login" aria-pressed="true">Sign in</button>
+      <button type="button" data-auth="register" aria-pressed="false">Register</button>
+    </div>
+    <form id="loginForm" class="auth-form">
+      <label>Email <input type="email" id="loginEmail" autocomplete="username" required></label>
+      <label>Password <input type="password" id="loginPassword" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Sign in</button>
+      <button class="linkbtn" type="button" id="forgotBtn">Forgot password?</button>
+    </form>
+    <form id="registerForm" class="auth-form" hidden>
+      <p class="sub">Registration is by invitation. Use the email address the admin invited.</p>
+      <label>Username <input id="regUserName" autocomplete="username" minlength="3" maxlength="30" pattern="[A-Za-z0-9_\-]{3,30}" required></label>
+      <p class="sub">Cannot be changed later. Letters, numbers, _ and - only.</p>
+      <label>Email <input type="email" id="regEmail" autocomplete="email" required></label>
+      <label>Password <input type="password" id="regPassword" autocomplete="new-password" minlength="8" required></label>
+      <label>Confirm password <input type="password" id="regPassword2" autocomplete="new-password" minlength="8" required></label>
+      <button class="btn primary" type="submit">Create account</button>
+    </form>
+    <p class="auth-msg" id="authMsg" role="status"></p>
+  </div>
+</div>
+
+<div class="app" id="appRoot" hidden>
   <nav class="nav" aria-label="Sections">
     <div class="brand">
       <span class="logo" aria-hidden="true"><i class="ti ti-check"></i></span>
@@ -33,9 +68,12 @@
       <button class="nav-btn" role="tab" data-tab="log" aria-selected="true"><i class="ti ti-checkbox" aria-hidden="true"></i><span>Today</span></button>
       <button class="nav-btn" role="tab" data-tab="buy" aria-selected="false"><i class="ti ti-shopping-cart" aria-hidden="true"></i><span>Buy list</span></button>
       <button class="nav-btn" role="tab" data-tab="analysis" aria-selected="false"><i class="ti ti-chart-bar" aria-hidden="true"></i><span>Insights</span></button>
+      <button class="nav-btn" role="tab" data-tab="upload" aria-selected="false"><i class="ti ti-upload" aria-hidden="true"></i><span>Upload</span></button>
+      <button class="nav-btn" role="tab" data-tab="admin" id="navAdmin" aria-selected="false" hidden><i class="ti ti-users" aria-hidden="true"></i><span>Admin</span></button>
       <button class="nav-btn" role="tab" data-tab="settings" aria-selected="false"><i class="ti ti-settings" aria-hidden="true"></i><span>Settings</span></button>
     </div>
     <div class="nav-foot">
+      <div class="sheet-title user-label" data-user-label></div>
       <button class="theme-btn" data-theme-toggle><i class="ti ti-sun-moon" aria-hidden="true"></i><span data-theme-label>Theme: auto</span></button>
     </div>
   </nav>
@@ -51,10 +89,12 @@
         <button class="icon-btn" data-theme-toggle aria-label="Change theme"><i class="ti ti-sun-moon"></i></button>
       </div>
       <form class="sheet-form" id="sheetForm" autocomplete="off">
-        <i class="ti ti-link" aria-hidden="true"></i>
-        <label for="sheetUrl" class="sr-only">Google Sheet link</label>
-        <input id="sheetUrl" list="recentSheets" placeholder="Paste your Google Sheet link" required>
-        <datalist id="recentSheets"></datalist>
+        <i class="ti ti-user" id="userIcon" aria-hidden="true" hidden></i>
+        <label for="userSelect" class="sr-only">Person</label>
+        <select id="userSelect" hidden></select>
+        <i class="ti ti-calendar" aria-hidden="true"></i>
+        <label for="yearSelect" class="sr-only">Year</label>
+        <select id="yearSelect"></select>
         <button type="submit" class="btn primary" id="loadBtn">Load</button>
       </form>
     </header>
@@ -64,7 +104,7 @@
 
       <!-- TODAY -->
       <section id="tab-log" class="tab-panel" role="tabpanel">
-        <div class="empty" data-empty><i class="ti ti-link"></i><p>Paste your sheet link above to start.</p></div>
+        <div class="empty" data-empty><i class="ti ti-link"></i><p>Choose a year above, or upload one in the Upload tab.</p></div>
         <div data-ready hidden>
           <div class="log-head">
             <div>
@@ -128,23 +168,64 @@
         </div>
       </section>
 
+      <!-- UPLOAD -->
+      <section id="tab-upload" class="tab-panel" role="tabpanel" hidden>
+        <div class="log-head"><div><h1>Upload a year</h1><p class="sub">Upload your Excel tracker (.xlsx). Each year can be uploaded only once and cannot be replaced.</p></div></div>
+        <div class="settings-grid">
+          <div class="card settings">
+            <h2>New year file</h2>
+            <form id="uploadForm">
+              <label>Year <input id="uploadYear" type="number" min="2000" max="2100" step="1" placeholder="2026" required></label>
+              <label>Excel file <input id="uploadFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></label>
+              <div class="row-actions"><button class="btn primary" id="uploadBtn" type="submit"><i class="ti ti-upload" aria-hidden="true"></i> Upload</button></div>
+            </form>
+            <p id="uploadStatus" class="sub"></p>
+          </div>
+          <div class="card settings">
+            <h2>Your uploaded years</h2>
+            <div id="myYears"><p class="sub">Loading…</p></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ADMIN -->
+      <section id="tab-admin" class="tab-panel" role="tabpanel" hidden>
+        <div class="log-head"><div><h1>Admin</h1><p class="sub">Invite people and open any tracker (read-only)</p></div></div>
+        <div class="settings-grid">
+          <div class="card settings">
+            <h2>Invite someone</h2>
+            <form id="inviteForm">
+              <label>Email <input type="email" id="inviteEmail" required></label>
+              <div class="row-actions"><button class="btn primary" type="submit"><i class="ti ti-mail-plus" aria-hidden="true"></i> Invite</button></div>
+            </form>
+            <p class="sub">They then register with exactly this email and choose their username.</p>
+            <div id="inviteList" class="rows"></div>
+          </div>
+          <div class="card settings">
+            <h2>Members</h2>
+            <div id="memberList" class="rows"><p class="sub">Loading…</p></div>
+          </div>
+        </div>
+      </section>
+
       <!-- SETTINGS -->
       <section id="tab-settings" class="tab-panel" role="tabpanel" hidden>
         <div class="log-head"><div><h1>Settings</h1><p class="sub">Saved in this browser only</p></div></div>
         <div class="settings-grid">
           <div class="card settings">
-            <h2>Connection</h2>
-            <label>Apps Script web app URL
-              <input id="scriptUrl" placeholder="https://script.google.com/macros/s/…/exec">
-            </label>
-            <label>Passcode
-              <input id="passcode" type="password" placeholder="The PASSCODE in Script properties">
-            </label>
-            <div class="row-actions">
-              <button class="btn primary" id="saveSettings">Save and test</button>
-              <button class="btn ghost" id="forgetSettings">Forget on this device</button>
-            </div>
-            <p id="settingsStatus" class="sub"></p>
+            <h2>Account</h2>
+            <p class="sub" id="accountInfo"></p>
+            <h3 style="margin-top:16px">Change password</h3>
+            <form id="pwForm">
+              <label>Current password <input type="password" id="pwCur" autocomplete="current-password" required></label>
+              <label>New password <input type="password" id="pwNew" autocomplete="new-password" minlength="8" required></label>
+              <label>Confirm new password <input type="password" id="pwNew2" autocomplete="new-password" minlength="8" required></label>
+              <div class="row-actions">
+                <button class="btn primary" type="submit">Change password</button>
+                <button class="btn ghost" type="button" id="signOutBtn"><i class="ti ti-logout" aria-hidden="true"></i> Sign out</button>
+              </div>
+            </form>
+            <p id="pwStatus" class="sub"></p>
           </div>
           <div class="card settings">
             <h2>Daily Dos groups</h2>

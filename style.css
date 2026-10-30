@@ -364,3 +364,32 @@ main { max-width: 1180px; margin: 0 auto; padding: 22px 32px 120px; }
   .week-strip .btn.small { display: none; }
   .savebar { padding-left: 14px; }
 }
+
+/* ---------- sign in / register ---------- */
+.auth { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+.auth-card { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 16px; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; background: var(--surface-2); border-radius: 12px; padding: 3px; }
+.auth-tabs button { font: inherit; font-weight: 600; font-size: .9rem; color: var(--ink-2); border: 0; background: none; padding: 8px 12px; border-radius: 10px; cursor: pointer; }
+.auth-tabs button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+.auth-form { display: flex; flex-direction: column; gap: 12px; }
+.auth-form label { display: flex; flex-direction: column; gap: 6px; font-size: .88rem; font-weight: 600; color: var(--ink-2); }
+.auth-form .linkbtn { align-self: center; font-size: .85rem; }
+.auth-msg { margin: 0; min-height: 1.2em; font-size: .88rem; color: var(--ink-2); }
+.auth-msg.err, .sub.err { color: var(--bad); }
+
+/* ---------- header pickers, rows ---------- */
+.sheet-form select { flex: 1; min-width: 0; border: 0; background: transparent; padding: 8px 4px; font-weight: 600; }
+.sheet-form select:focus { outline: none; }
+.user-label { max-width: none; margin-bottom: 8px; }
+.rows { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; font-size: .9rem; }
+.row .who { flex: 1 1 140px; min-width: 0; }
+.row .years { display: flex; gap: 6px; flex-wrap: wrap; flex: 2 1 160px; }
+.year-tag { display: inline-flex; align-items: center; gap: 4px; background: var(--accent-soft); color: var(--accent-strong); border-radius: 999px; padding: 3px 4px 3px 10px; font-weight: 600; font-size: .82rem; }
+.year-tag a, .year-tag .x { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 999px; color: inherit; background: none; border: 0; cursor: pointer; font-size: .9rem; }
+.year-tag a:hover, .year-tag .x:hover { background: var(--surface); }
+.pill { display: inline-block; margin-left: 6px; }
+
+/* ---------- read-only (admin viewing someone else) ---------- */
+body.readonly .savebar { display: none !important; }
+body.readonly #logBody, body.readonly #buyRows, body.readonly #addBuyRow, body.readonly #saveBuyBtn, body.readonly #budgetInput { pointer-events: none; opacity: .75; }

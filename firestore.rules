@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/members/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Invite list — only the admin manages it. A person may read the invite for their own email
+    // (the registration screen uses this to check they were invited).
+    match /invites/{email} {
+      allow get: if signedIn() && myEmail() == email;
+      allow read, write: if isAdmin();
+    }
+
+    // Reserves a username (lower-cased) so two people cannot share one.
+    // Create-only: it can never be changed or released, so usernames stay fixed.
+    match /usernames/{name} {
+      allow get: if signedIn();
+      allow create: if signedIn()
+        && name.matches('^[a-z0-9_-]{3,30}$')
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid
+        && exists(/databases/$(database)/documents/invites/$(myEmail()));
+      allow update, delete: if false;
+    }
+
+    // Member = the registration table. No password here: Firebase Authentication stores it (hashed).
+    match /members/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['userName', 'email', 'role', 'createdAt'])
+        && request.resource.data.role == 'user'                       // admin is set by hand in the console
+        && request.resource.data.email == myEmail()
+        && request.resource.data.userName.matches('^[A-Za-z0-9_-]{3,30}$')
+        && exists(/databases/$(database)/documents/invites/$(myEmail()))
+        && getAfter(/databases/$(database)/documents/usernames/$(request.resource.data.userName.lower())).data.uid == uid;
+      allow update, delete: if false;                                 // username never changes
+    }
+
+    // document_link = one row per user per year (the fact table). The document id is "<uid>_<year>",
+    // so a second upload of the same year is rejected as "already exists".
+    // Rows are written ONLY by the Apps Script (as project owner, which bypasses these rules).
+    // Browsers can read their own rows, never create or edit them — so nobody can point a row
+    // at someone else's file. The admin may delete a row to clear a wrong upload.
+    match /document_link/{id} {
+      allow read: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update: if false;
+      allow delete: if isAdmin();
+    }
+  }
+}
