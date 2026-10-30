@@ -595,7 +595,13 @@ async function saveAll() {
   const btn = $('#saveDayBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    await api('saveDays', { days: list });
+    try {
+      await api('saveDays', { days: list });
+    } catch (err) {
+      // older deployed script without saveDays: save one day at a time
+      if (!/unknown action/i.test(err.message)) throw err;
+      for (const d of list) await api('saveDay', d);
+    }
     if (!S.demo) applyLocal('saveDays', { days: list });
     S.pending = freshPending();
     buildIndex();
