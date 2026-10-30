@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Life Tracker</title>
+  <meta name="description" content="Log daily dos, habits, products, period and weight to a Google Sheet, and see in-depth analysis.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌸</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">🌸</span>
+      <div>
+        <h1>Life Tracker</h1>
+        <p class="sheet-title" id="sheetTitle">No sheet loaded</p>
+      </div>
+    </div>
+    <form class="sheet-form" id="sheetForm" autocomplete="off">
+      <label for="sheetUrl" class="sr-only">Google Sheet link</label>
+      <input id="sheetUrl" list="recentSheets" placeholder="Paste your Google Sheet link…" required>
+      <datalist id="recentSheets"></datalist>
+      <button type="submit" class="btn primary" id="loadBtn">Load</button>
+    </form>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" data-tab="log" aria-selected="true">📝 Log a day</button>
+    <button role="tab" data-tab="buy" aria-selected="false">🛒 Buy list</button>
+    <button role="tab" data-tab="analysis" aria-selected="false">📊 Analysis</button>
+    <button role="tab" data-tab="settings" aria-selected="false">⚙️ Settings</button>
+  </nav>
+
+  <main>
+    <div id="banner" class="banner" hidden></div>
+
+    <!-- LOG -->
+    <section id="tab-log" class="tab-panel" role="tabpanel">
+      <div class="empty" data-empty>Load your sheet to start logging.</div>
+      <div data-ready hidden>
+        <div class="date-nav">
+          <button class="btn icon" id="prevDay" aria-label="Previous day">‹</button>
+          <input type="date" id="logDate">
+          <button class="btn icon" id="nextDay" aria-label="Next day">›</button>
+          <button class="btn ghost" id="todayBtn">Today</button>
+          <span class="date-label" id="dateLabel"></span>
+        </div>
+        <div class="log-grid" id="logGrid"></div>
+        <div class="savebar" id="saveBar" hidden>
+          <span id="pendingText"></span>
+          <button class="btn ghost" id="discardBtn">Discard</button>
+          <button class="btn primary" id="saveDayBtn">Save to sheet</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- BUY LIST -->
+    <section id="tab-buy" class="tab-panel" role="tabpanel" hidden>
+      <div class="empty" data-empty>Load your sheet to plan purchases.</div>
+      <div data-ready hidden>
+        <div class="month-chips" id="monthChips"></div>
+        <div class="buy-layout">
+          <div class="card">
+            <div class="card-head">
+              <h2 id="buyMonthTitle">Month</h2>
+              <label class="budget-field">Budget ₹
+                <input type="number" min="0" step="50" id="budgetInput" placeholder="—">
+              </label>
+            </div>
+            <div class="buy-table-wrap">
+              <table class="buy-table">
+                <thead><tr><th>#</th><th>Product</th><th class="num">Approx cost ₹</th><th>Status</th><th></th></tr></thead>
+                <tbody id="buyRows"></tbody>
+              </table>
+            </div>
+            <datalist id="productNames"></datalist>
+            <div class="row-actions">
+              <button class="btn ghost" id="addBuyRow">+ Add product</button>
+              <span class="spacer"></span>
+              <span class="dirty-note" id="buyDirty" hidden>Unsaved changes</span>
+              <button class="btn primary" id="saveBuyBtn">Save list</button>
+            </div>
+          </div>
+          <aside class="card" id="buySummary"></aside>
+        </div>
+      </div>
+    </section>
+
+    <!-- ANALYSIS -->
+    <section id="tab-analysis" class="tab-panel" role="tabpanel" hidden>
+      <div class="empty" data-empty>Load your sheet to see the analysis.</div>
+      <div data-ready hidden>
+        <div class="analysis-bar">
+          <div class="pills" id="analysisPills"></div>
+          <label class="range-field">Period
+            <select id="rangeSelect"></select>
+          </label>
+        </div>
+        <div id="analysisBody"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="tab-settings" class="tab-panel" role="tabpanel" hidden>
+      <div class="card settings">
+        <h2>Connection</h2>
+        <p class="muted">These stay in this browser only. The sheet link is pasted at the top each time.</p>
+        <label>Apps Script web app URL
+          <input id="scriptUrl" placeholder="https://script.google.com/macros/s/…/exec">
+        </label>
+        <label>Passcode
+          <input id="passcode" type="password" placeholder="The PASSCODE you set in Script properties">
+        </label>
+        <div class="row-actions">
+          <button class="btn primary" id="saveSettings">Save &amp; test</button>
+          <button class="btn ghost" id="forgetSettings">Forget on this device</button>
+          <span id="settingsStatus" class="muted"></span>
+        </div>
+        <hr>
+        <h2>Try it first</h2>
+        <p class="muted">Explore every screen with made-up data. Nothing is sent anywhere.</p>
+        <button class="btn ghost" id="demoBtn">Load demo data</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
