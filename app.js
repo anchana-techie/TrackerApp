@@ -30,6 +30,9 @@ function h(tag, props, ...kids) {
   return e;
 }
 
+// append/replace children, skipping empty slots (null/false) instead of printing them
+const fill = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter(k => k !== null && k !== undefined && k !== false));
+
 const store = {
   get(k, fallback) { try { const v = localStorage.getItem('lt.' + k); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } },
   set(k, v) { try { localStorage.setItem('lt.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
@@ -83,11 +86,14 @@ const S = {
   buyMonth: null,
   buyDraft: null,
   buyDirty: false,
+  mode: 'day',
+  weekCat: 'dos',
+  countFns: [],
   view: 'overview',
   range: 'all',
   charts: []
 };
-const freshPending = () => ({ grid: { products: {}, dos: {}, habits: {} }, period: undefined, weight: undefined, newProducts: [] });
+const freshPending = () => ({ grid: { products: {}, dos: {}, habits: {} }, period: {}, weight: {}, newProducts: [] });
 S.pending = freshPending();
 
 /* =========================================================
@@ -130,6 +136,8 @@ function applyLocal(action, p) {
     if (p.weight !== undefined && sh.weight) {
       if (p.weight === '') delete sh.weight.entries[p.date]; else sh.weight.entries[p.date] = Number(p.weight);
     }
+  } else if (action === 'saveDays') {
+    p.days.forEach(d => applyLocal('saveDay', d));
   } else if (action === 'saveBuyList') {
     sh.buy.months[p.month] = p.items.map(i => ({ product: i.product, cost: i.cost === '' || i.cost === null ? null : Number(i.cost) }));
     sh.buy.slots = Math.max(sh.buy.slots, p.items.length);
@@ -170,7 +178,7 @@ async function loadSheet({ quiet = false } = {}) {
     S.data = data;
     buildIndex();
     if (!S.demo) rememberSheet(S.sheetUrl, data.title);
-    $('#sheetTitle').textContent = (S.demo ? 'Demo · ' : '') + data.title;
+    $$('[data-sheet-title]').forEach(e => { e.textContent = (S.demo ? 'Demo · ' : '') + data.title; });
     $$('[data-empty]').forEach(e => { e.hidden = true; });
     $$('[data-ready]').forEach(e => { e.hidden = false; });
     showBanner();
@@ -181,6 +189,7 @@ async function loadSheet({ quiet = false } = {}) {
       if (!S.buyMonth) S.buyMonth = defaultBuyMonth();
     }
     renderAll();
+    renderGroupEditor();
   } catch (err) {
     toast(err.message, true);
   } finally {
@@ -225,7 +234,7 @@ function rememberSheet(url, title) {
 }
 function fillRecent() {
   const dl = $('#recentSheets');
-  dl.replaceChildren(...store.get('recent', []).map(r => h('option', { value: r.url }, r.title)));
+  fill(dl, ...store.get('recent', []).map(r => h('option', { value: r.url }, r.title)));
 }
 
 function showBanner() {
@@ -245,7 +254,8 @@ function showBanner() {
  * ======================================================= */
 function switchTab(tab) {
   S.tab = tab;
-  $$('.tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+  $$('.nav-btn').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+  window.scrollTo(0, 0);
   $$('.tab-panel').forEach(p => { p.hidden = p.id !== 'tab-' + tab; });
   if (S.data) renderTab();
 }
@@ -254,199 +264,349 @@ function renderTab() {
   if (S.tab === 'log') renderLog();
   else if (S.tab === 'buy') renderBuy();
   else if (S.tab === 'analysis') renderAnalysis();
+  else if (S.tab === 'settings') renderGroupEditor();
 }
 
 /* =========================================================
- * LOG A DAY
+ * ICONS & GROUPS
  * ======================================================= */
+const ICONS = [
+  [/brush teeth|teeth|colgate|tooth/i, 'dental'], [/bath|shower/i, 'bath'], [/breakfast/i, 'coffee'], [/lunch/i, 'salad'],
+  [/dinner/i, 'tools-kitchen-2'], [/exercise|workout|gym|walk|run/i, 'run'], [/bed/i, 'bed'], [/language/i, 'language'],
+  [/meditat|yoga/i, 'yoga'], [/face exercise|face massage/i, 'mood-smile'], [/face/i, 'droplet'], [/read|book|art/i, 'book'],
+  [/restroom/i, 'hourglass'], [/study|tech|learn|course/i, 'device-laptop'], [/work/i, 'briefcase'], [/curry|leaf|leaves/i, 'leaf'],
+  [/oil/i, 'bottle'], [/seed|fenu/i, 'seeding'], [/nut|badam|cashew|walnut|almond/i, 'nut'], [/sugar|sweet/i, 'candy-off'],
+  [/sun|vitamin/i, 'sun'], [/\btea\b|coffee/i, 'cup'], [/water/i, 'glass-full'], [/serum|mask/i, 'flask'], [/hair/i, 'brush'],
+  [/cheese/i, 'cheese'], [/maida|bread/i, 'bread-off'], [/harpic|toilet|cleaner|spray/i, 'spray'], [/razor/i, 'razor'],
+  [/fruit|apple/i, 'apple'], [/salt|powder|turmeric/i, 'salt'], [/dettol/i, 'first-aid-kit'], [/balls/i, 'circle-dot'],
+  [/surf/i, 'wash-machine'], [/soap|wash|scrub|clinic|shampoo|conditioner|lotion|cream/i, 'bottle'], [/brush/i, 'brush'], [/egg/i, 'egg']
+];
+const iconFor = (name, k) => (ICONS.find(([re]) => re.test(name)) || [0, k === 'products' ? 'shopping-bag' : 'circle-check'])[1];
+const icon = (name, cls = '') => h('i', { class: `ti ti-${name} ${cls}`, 'aria-hidden': 'true' });
+
+const GROUPS = [['Morning', 'sunrise'], ['Daytime', 'sun-high'], ['Evening', 'moon']];
+function autoGroup(name) {
+  if (/morning|breakfast|bath|fold bed|vitamin/i.test(name)) return 'Morning';
+  if (/night|dinner|evening|sleep/i.test(name)) return 'Evening';
+  return 'Daytime';
+}
+const groupOf = name => store.get('groups', {})[name] || autoGroup(name);
+
+/* =========================================================
+ * TODAY — pending edits can span many days
+ * ======================================================= */
+const pkey = (date, name) => date + '|' + name;
 function originalGrid(k, name, date) { return !!S.idx[k]?.sets[name]?.has(date); }
 function currentGrid(k, name, date) {
-  const p = S.pending.grid[k];
-  return name in p ? p[name] : originalGrid(k, name, date);
+  const p = S.pending.grid[k], key = pkey(date, name);
+  return key in p ? p[key] : originalGrid(k, name, date);
 }
+function setGrid(k, name, date, on) {
+  const p = S.pending.grid[k], key = pkey(date, name);
+  if (on === originalGrid(k, name, date)) delete p[key]; else p[key] = on;
+}
+const originalPeriod = date => !!S.idx.period?.marked.has(date);
+const currentPeriod = date => date in S.pending.period ? S.pending.period[date] : originalPeriod(date);
+function setPeriod(date, on) { if (on === originalPeriod(date)) delete S.pending.period[date]; else S.pending.period[date] = on; }
 function pendingCount() {
   const p = S.pending;
-  return Object.values(p.grid).reduce((s, o) => s + Object.keys(o).length, 0) + (p.period !== undefined ? 1 : 0) + (p.weight !== undefined ? 1 : 0);
+  return Object.values(p.grid).reduce((s, o) => s + Object.keys(o).length, 0) + Object.keys(p.period).length + Object.keys(p.weight).length;
 }
+function pendingDates() {
+  const p = S.pending, out = new Set([...Object.keys(p.period), ...Object.keys(p.weight)]);
+  Object.values(p.grid).forEach(o => Object.keys(o).forEach(k => out.add(k.slice(0, 10))));
+  return out;
+}
+function streakEnding(set, date) { let n = 0, k = date; while (set.has(k)) { n++; k = addDays(k, -1); } return n; }
 
-function streakEnding(set, date) {
-  let n = 0, k = date;
-  while (set.has(k)) { n++; k = addDays(k, -1); }
-  return n;
+function dayScore(date) {
+  let done = 0, total = 0;
+  for (const k of ['dos', 'habits']) {
+    const ix = S.idx[k]; if (!ix) continue;
+    total += ix.items.length;
+    done += ix.items.filter(n => currentGrid(k, n, date)).length;
+  }
+  return { done, total, pct: total ? done / total : 0 };
 }
+const ringBg = pct => `conic-gradient(var(--done) ${Math.round(pct * 360)}deg, var(--miss) 0)`;
+const mondayOf = k => addDays(k, -((dow(k) + 6) % 7));
 
 function renderLog() {
-  const date = S.logDate;
-  $('#logDate').value = date;
-  $('#logDate').min = S.idx.first; $('#logDate').max = S.idx.last;
-  $('#dateLabel').textContent = fmtLong(date) + (date === todayKey() ? ' · today' : '');
-  const grid = $('#logGrid');
-  grid.replaceChildren();
-
-  grid.append(checklistCard('dos', '✅ Daily Dos', date));
-  grid.append(checklistCard('habits', '🌿 Habits', date));
-  grid.append(bodyCard(date));
-  grid.append(productsCard(date));
+  const date = S.logDate, t = todayKey();
+  $('#dateLabel').textContent = date === t ? 'Today' : fmt(date, { weekday: 'long' });
+  $('#dateSub').textContent = fmt(date, { day: 'numeric', month: 'long', year: 'numeric' }) + (date === t ? ` · ${fmt(date, { weekday: 'long' })}` : '');
+  if (date !== t && t >= S.idx.first && t <= S.idx.last) $('#dateSub').append(' · ', h('button', { class: 'linkbtn', onclick: () => { S.logDate = t; renderLog(); } }, 'Go to today'));
+  $$('.seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === S.mode)));
+  S.countFns = [];
+  renderWeekStrip();
+  const body = $('#logBody');
+  fill(body, S.mode === 'week' ? buildWeek() : buildDay());
   updateSaveBar();
 }
 
-function checklistCard(k, title, date) {
-  const ix = S.idx[k];
-  if (!ix) return h('div');
-  const inSheet = ix.dateSet.has(date);
-  const done = ix.items.filter(n => currentGrid(k, n, date)).length;
-  const list = h('ul', { class: 'checklist' }, ix.items.map(name => {
-    const on = currentGrid(k, name, date);
-    const changed = name in S.pending.grid[k];
-    const streak = streakEnding(ix.sets[name], addDays(date, -1)) + (on ? 1 : 0);
-    return h('li', null, h('label', { class: 'check' + (changed ? ' changed' : '') },
-      h('input', { type: 'checkbox', checked: on, disabled: !inSheet, onchange: e => togglePending(k, name, e.target.checked) }),
-      h('span', { class: 'box', 'aria-hidden': 'true' }, '✓'),
-      h('span', { class: 'label' }, name),
-      streak >= 2 ? h('span', { class: 'meta', title: 'Streak' }, '🔥 ' + streak) : null
-    ));
-  }));
-  return h('div', { class: 'card' },
-    h('div', { class: 'card-head' }, h('h2', null, title), h('span', { class: 'count-badge' }, `${done}/${ix.items.length}`)),
-    inSheet ? null : h('p', { class: 'hint' }, 'This date is not a column in this sheet.'),
-    list,
-    h('div', { class: 'row-actions' },
-      h('button', { class: 'btn small ghost', disabled: !inSheet, onclick: () => { ix.items.forEach(n => togglePending(k, n, true, false)); renderLog(); } }, 'Tick all'),
-      h('button', { class: 'btn small ghost', disabled: !inSheet, onclick: () => { ix.items.forEach(n => togglePending(k, n, false, false)); renderLog(); } }, 'Clear'))
+function updateLogMeta() {
+  renderWeekStrip();
+  const old = $('#summaryCard');
+  if (old) old.replaceWith(buildSummary(S.logDate));
+  S.countFns.forEach(f => f());
+  updateSaveBar();
+}
+
+function renderWeekStrip() {
+  const start = mondayOf(S.logDate), t = todayKey(), pend = pendingDates();
+  const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
+  const strip = $('#weekStrip');
+  const inRange = d => d >= S.idx.first && d <= S.idx.last;
+  fill(strip,
+    h('button', { class: 'icon-btn', 'aria-label': 'Previous week', disabled: addDays(start, -1) < S.idx.first, onclick: () => { S.logDate = clampDate(addDays(S.logDate, -7)); renderLog(); } }, icon('chevron-left')),
+    h('div', { class: 'week-days' }, days.map(d => {
+      const sc = dayScore(d);
+      return h('button', {
+        class: 'day-chip' + (d === S.logDate ? ' sel' : '') + (d === t ? ' today' : '') + (pend.has(d) ? ' pend' : ''),
+        disabled: !inRange(d), 'aria-label': fmtLong(d) + ` — ${sc.done} of ${sc.total} done`,
+        onclick: () => { S.logDate = d; renderLog(); }
+      }, h('span', { class: 'dw' }, DOW[dow(d)]), h('span', { class: 'dn' }, parseKey(d).getDate()),
+        h('span', { class: 'ring', style: `background:${ringBg(sc.pct)}` }));
+    })),
+    h('button', { class: 'icon-btn', 'aria-label': 'Next week', disabled: addDays(start, 7) > S.idx.last, onclick: () => { S.logDate = clampDate(addDays(S.logDate, 7)); renderLog(); } }, icon('chevron-right')),
+    !days.includes(t) && inRange(t) ? h('button', { class: 'btn small ghost', onclick: () => { S.logDate = t; renderLog(); } }, 'Today') : null
   );
 }
 
-function togglePending(k, name, on, rerender = true) {
-  const p = S.pending.grid[k];
-  if (on === originalGrid(k, name, S.logDate)) delete p[name]; else p[name] = on;
-  if (rerender) renderLog();
-}
-
-function bodyCard(date) {
-  const card = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, '🌸 Period & weight')));
-  const ip = S.idx.period;
-  if (ip) {
-    const orig = ip.marked.has(date);
-    const on = S.pending.period !== undefined ? S.pending.period : orig;
-    const inCal = ip.dateSet.has(date);
-    const btn = h('button', {
-      class: 'toggle-big', 'aria-pressed': String(on), disabled: !inCal,
-      onclick: () => {
-        const next = !on;
-        S.pending.period = next === orig ? undefined : next;
-        renderLog();
-      }
-    }, h('span', { style: 'font-size:1.5rem' }, on ? '🩸' : '○'),
-      h('span', null, h('b', null, on ? 'Period day' : 'Not a period day'), h('br'), h('span', { class: 'muted' }, 'Tap to change')));
-    card.append(btn);
+function buildSummary(date) {
+  const sc = dayScore(date);
+  const pills = [];
+  if (S.idx.period) {
     const P = analyzePeriod();
+    if (currentPeriod(date)) pills.push(h('span', { class: 'pill pink' }, icon('droplet'), 'Period day'));
     if (P.periods.length) {
       const cd = cycleDayOn(P, date);
-      card.append(h('p', { class: 'hint' },
-        cd ? `Cycle day ${cd.day} · ${cd.phase}` : '',
-        P.next ? (P.late && date >= P.next ? ` · expected ${fmt(P.next)} (${plural(P.late, 'day')} late)` : ` · next period expected ${fmt(P.next)}`) : ''));
+      if (cd) pills.push(h('span', { class: 'pill pink' }, `Cycle day ${cd.day} · ${cd.phase}`));
+      if (P.next && date <= addDays(P.next, 10)) pills.push(h('span', { class: 'pill' }, P.late && date >= P.next ? `Period ${plural(P.late, 'day')} late` : `Next period ${fmt(P.next)}`));
     }
   }
-  const iw = S.idx.weight;
-  if (iw) {
-    const orig = iw.entries[date];
-    const val = S.pending.weight !== undefined ? S.pending.weight : (orig ?? '');
-    const inp = h('input', {
-      type: 'number', step: '0.1', min: '20', max: '300', value: val, placeholder: 'kg', disabled: !iw.dateSet.has(date),
-      'aria-label': 'Weight in kg',
-      oninput: e => {
-        const v = e.target.value;
-        const o = orig === undefined ? '' : String(orig);
-        S.pending.weight = v === o ? undefined : v;
-        updateSaveBar();
-      }
-    });
-    const prev = Object.keys(iw.entries).filter(k => k < date).sort().pop();
-    card.append(h('div', { class: 'weight-row' }, h('label', null, 'Weight '), inp, h('span', { class: 'muted' }, 'kg')));
-    if (prev) card.append(h('p', { class: 'hint' }, `Last weigh-in: ${iw.entries[prev]} kg on ${fmt(prev)}`));
-  }
-  return card;
+  const w = S.pending.weight[date] ?? S.idx.weight?.entries[date];
+  if (w !== undefined && w !== '') pills.push(h('span', { class: 'pill teal' }, icon('scale'), `${w} kg`));
+  const best = ['dos', 'habits'].flatMap(k => (S.idx[k]?.items || []).map(n => ({ n, s: streakEnding(S.idx[k].sets[n], addDays(date, -1)) + (currentGrid(k, n, date) ? 1 : 0) }))).sort((a, b) => b.s - a.s)[0];
+  if (best && best.s >= 3) pills.push(h('span', { class: 'pill' }, icon('flame'), `${best.n} · ${best.s} days`));
+  const left = sc.total - sc.done;
+  return h('div', { class: 'card summary', id: 'summaryCard' },
+    h('div', { class: 'big-ring', style: `background:${ringBg(sc.pct)}` }, h('div', null, Math.round(sc.pct * 100) + '%')),
+    h('div', null,
+      h('div', { class: 'lead' }, `${sc.done} of ${sc.total} done`),
+      h('p', { class: 'sub' }, left === 0 ? 'Everything ticked. Lovely.' : `${plural(left, 'item')} to go across Daily Dos and Habits`),
+      pills.length ? h('div', { class: 'pillset' }, pills) : null));
 }
 
-function productsCard(date) {
-  const ix = S.idx.products;
-  if (!ix) return h('div');
+function tapTile(k, name, date, extra = {}) {
+  const ix = S.idx[k];
   const inSheet = ix.dateSet.has(date);
+  const btn = h('button', { class: 'tap', disabled: !inSheet, title: inSheet ? name : 'This date is not in the sheet' });
+  const paint = () => {
+    const on = currentGrid(k, name, date);
+    btn.classList.toggle('on', on);
+    btn.classList.toggle('changed', pkey(date, name) in S.pending.grid[k]);
+    btn.setAttribute('aria-pressed', String(on));
+    const streak = ix.sets[name] ? streakEnding(ix.sets[name], addDays(date, -1)) + (on ? 1 : 0) : 0;
+    let meta = null;
+    if (k !== 'products' && streak >= 2) meta = h('span', { class: 'tm', title: `${streak}-day streak` }, icon('flame'), streak);
+    if (k === 'products' && extra.last) meta = h('span', { class: 'tm', title: 'Last bought' }, fmt(extra.last));
+    fill(btn, icon(iconFor(name, k), 'ic'),
+      extra.planned ? h('span', { class: 'tag-mini' }, 'On list') : null,
+      h('span', { class: 'tn' }, name), meta, h('span', { class: 'ck' }, icon('check')));
+  };
+  btn.addEventListener('click', () => { setGrid(k, name, date, !currentGrid(k, name, date)); paint(); updateLogMeta(); });
+  paint();
+  return btn;
+}
+
+function section(iconName, title, countFn, ...content) {
+  const count = h('span', { class: 'count' });
+  if (countFn) { const f = () => { count.textContent = countFn(); }; f(); S.countFns.push(f); }
+  return h('div', { class: 'section' }, h('div', { class: 'section-head' }, icon(iconName), h('h2', null, title), count), ...content);
+}
+
+function buildDay() {
+  const date = S.logDate;
+  const wrap = h('div');
+  wrap.append(buildSummary(date));
+  const doneOf = (k, names) => () => `${names.filter(n => currentGrid(k, n, date)).length}/${names.length}`;
+
+  if (S.idx.dos) {
+    for (const [g, ic] of GROUPS) {
+      const names = S.idx.dos.items.filter(n => groupOf(n) === g);
+      if (!names.length) continue;
+      wrap.append(section(ic, g, doneOf('dos', names), h('div', { class: 'tiles-grid' }, names.map(n => tapTile('dos', n, date)))));
+    }
+  }
+  if (S.idx.habits) {
+    const names = S.idx.habits.items;
+    wrap.append(section('leaf', 'Habits', doneOf('habits', names), h('div', { class: 'tiles-grid' }, names.map(n => tapTile('habits', n, date)))));
+  }
+
+  // body: period + weight
+  const body = [];
+  if (S.idx.period) {
+    const inCal = S.idx.period.dateSet.has(date);
+    const pb = h('button', { class: 'tap pink', disabled: !inCal });
+    const paintP = () => {
+      const on = currentPeriod(date);
+      pb.classList.toggle('on', on); pb.classList.toggle('changed', date in S.pending.period);
+      pb.setAttribute('aria-pressed', String(on));
+      fill(pb, icon('droplet', 'ic'), h('span', { class: 'tn' }, on ? 'Period day' : 'Period'), h('span', { class: 'ck' }, icon('check')));
+    };
+    pb.addEventListener('click', () => { setPeriod(date, !currentPeriod(date)); paintP(); updateLogMeta(); });
+    paintP();
+    body.push(pb);
+  }
+  if (S.idx.weight) {
+    const orig = S.idx.weight.entries[date];
+    const val = S.pending.weight[date] ?? (orig ?? '');
+    const prev = Object.keys(S.idx.weight.entries).filter(k => k < date).sort().pop();
+    const inp = h('input', {
+      type: 'number', step: '0.1', min: '20', max: '300', value: val, placeholder: prev ? String(S.idx.weight.entries[prev]) : 'kg',
+      inputmode: 'decimal', 'aria-label': 'Weight in kg', disabled: !S.idx.weight.dateSet.has(date),
+      oninput: e => {
+        const v = e.target.value, o = orig === undefined ? '' : String(orig);
+        if (v === o) delete S.pending.weight[date]; else S.pending.weight[date] = v;
+        tile.classList.toggle('changed', date in S.pending.weight);
+        updateLogMeta();
+      }
+    });
+    const tile = h('div', { class: 'tap weight' + (date in S.pending.weight ? ' changed' : '') }, icon('scale', 'ic'),
+      h('div', null, h('div', { class: 'wrow' }, inp, h('span', null, 'kg')),
+        h('div', { class: 'tn', style: 'margin-top:4px' }, prev ? `Last ${S.idx.weight.entries[prev]} kg · ${fmt(prev)}` : 'Weight')));
+    body.push(tile);
+  }
+  if (body.length) wrap.append(section('heart-rate-monitor', 'Body', null, h('div', { class: 'tiles-grid' }, body)));
+
+  if (S.idx.products) wrap.append(buildProducts(date));
+  return wrap;
+}
+
+function buildProducts(date) {
+  const ix = S.idx.products;
   const monthName = MONTHS[parseKey(date).getMonth()];
   const planned = new Set((S.data.sheets.buy?.months[monthName] || []).map(i => norm(i.product)));
-  const names = [...ix.items, ...S.pending.newProducts.filter(n => !ix.items.some(i => norm(i) === norm(n)))];
+  const all = () => [...ix.items, ...S.pending.newProducts.filter(n => !ix.items.some(i => norm(i) === norm(n)))];
   const lastBought = name => [...(ix.sets[name] || [])].filter(d => d < date).sort().pop();
-  const bought = names.filter(n => currentGrid('products', n, date)).length;
-
-  const list = h('ul', { class: 'checklist scroll-list' });
-  const draw = q => {
-    list.replaceChildren(...names
-      .filter(n => !q || norm(n).includes(norm(q)))
-      .sort((a, b) => (planned.has(norm(b)) - planned.has(norm(a))) || a.localeCompare(b))
-      .map(name => {
-        const on = currentGrid('products', name, date);
-        const lb = lastBought(name);
-        return h('li', null, h('label', { class: 'check' + (name in S.pending.grid.products ? ' changed' : '') },
-          h('input', { type: 'checkbox', checked: on, disabled: !inSheet, onchange: e => togglePending('products', name, e.target.checked) }),
-          h('span', { class: 'box', 'aria-hidden': 'true' }, '✓'),
-          h('span', { class: 'label' }, name),
-          h('span', { class: 'meta' }, planned.has(norm(name)) ? h('span', { class: 'tag' }, 'on list') : null, lb ? ' last ' + fmt(lb) : '')
-        ));
-      }));
+  const grid = h('div', { class: 'tiles-grid' });
+  let q = '';
+  const draw = () => {
+    const names = all();
+    let show;
+    if (q) show = names.filter(n => norm(n).includes(norm(q)));
+    else {
+      show = names.filter(n => planned.has(norm(n)) || currentGrid('products', n, date));
+      if (!show.length) show = [...names].sort((a, b) => (ix.sets[b]?.size || 0) - (ix.sets[a]?.size || 0)).slice(0, 6);
+    }
+    show.sort((a, b) => (planned.has(norm(b)) - planned.has(norm(a))) || a.localeCompare(b));
+    fill(grid, ...show.slice(0, 30).map(n => tapTile('products', n, date, { planned: planned.has(norm(n)), last: lastBought(n) })));
+    if (!show.length) grid.append(h('p', { class: 'sub' }, `No product matches “${q}”. Add it below.`));
   };
-  draw('');
-  const newInp = h('input', { placeholder: 'New product name', disabled: !inSheet });
-  return h('div', { class: 'card' },
-    h('div', { class: 'card-head' }, h('h2', null, '🛍️ Bought today'), h('span', { class: 'count-badge' }, plural(bought, 'item'))),
-    h('input', { class: 'search', placeholder: 'Search products…', oninput: e => draw(e.target.value) }),
-    list,
-    h('form', {
-      class: 'add-inline', onsubmit: e => {
-        e.preventDefault();
-        const n = newInp.value.trim();
-        if (!n) return;
-        if (!names.some(x => norm(x) === norm(n))) S.pending.newProducts.push(n);
-        const existing = names.find(x => norm(x) === norm(n)) || n;
-        togglePending('products', existing, true);
-      }
-    }, newInp, h('button', { class: 'btn ghost', disabled: !inSheet }, 'Add & tick')),
-    h('p', { class: 'hint' }, 'New products are added as a new row in your Products sheet.')
-  );
+  draw();
+  const newInp = h('input', { placeholder: 'New product name' });
+  const countFn = () => `${all().filter(n => currentGrid('products', n, date)).length} bought`;
+  return section('shopping-bag', 'Bought today', countFn,
+    h('p', { class: 'sub', style: 'margin:-4px 0 10px' }, planned.size ? `Showing this month's list. Search to find any product.` : 'Search to find any product.'),
+    h('div', { class: 'search-row' },
+      h('input', { class: 'search', type: 'search', placeholder: 'Search products', oninput: e => { q = e.target.value; draw(); } }),
+      h('form', {
+        onsubmit: e => {
+          e.preventDefault();
+          const n = newInp.value.trim(); if (!n) return;
+          const existing = all().find(x => norm(x) === norm(n));
+          if (!existing) S.pending.newProducts.push(n);
+          setGrid('products', existing || n, date, true);
+          newInp.value = ''; draw(); updateLogMeta();
+        }
+      }, newInp, h('button', { class: 'btn ghost' }, icon('plus'), 'Add'))),
+    grid);
+}
+
+function buildWeek() {
+  const start = mondayOf(S.logDate), t = todayKey();
+  const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
+  const cats = [['dos', 'Daily Dos'], ['habits', 'Habits'], ['products', 'Products'], ['period', 'Period']].filter(([k]) => S.idx[k]);
+  if (!cats.some(([k]) => k === S.weekCat)) S.weekCat = cats[0]?.[0];
+  const wrap = h('div', { class: 'card' });
+  wrap.append(h('div', { class: 'week-cats' }, cats.map(([k, l]) => h('button', { class: 'chip', 'aria-pressed': String(S.weekCat === k), onclick: () => { S.weekCat = k; renderLog(); } }, l))));
+  const grid = h('div', { class: 'wgrid' });
+  grid.append(h('div'), ...days.map(d => h('div', { class: 'wh' + (d === t ? ' today' : '') }, DOW[dow(d)].slice(0, 2), h('br'), parseKey(d).getDate())));
+
+  const cell = (getOn, setOn, isChanged, enabled, label, pink) => {
+    const b = h('button', { class: 'wcell', disabled: !enabled, 'aria-label': label });
+    if (pink) b.style.setProperty('--done', 'var(--pink)');
+    const paint = () => { const on = getOn(); b.classList.toggle('on', on); b.classList.toggle('changed', isChanged()); b.setAttribute('aria-pressed', String(on)); fill(b, icon('check')); };
+    b.addEventListener('click', () => { setOn(!getOn()); paint(); updateLogMeta(); });
+    paint();
+    return b;
+  };
+  const row = (k, name) => {
+    grid.append(h('div', { class: 'wn', title: name }, icon(iconFor(name, k)), h('span', null, name)));
+    days.forEach(d => grid.append(cell(() => currentGrid(k, name, d), on => setGrid(k, name, d, on), () => pkey(d, name) in S.pending.grid[k],
+      S.idx[k].dateSet.has(d), `${name}, ${fmtLong(d)}`)));
+  };
+
+  const k = S.weekCat;
+  if (k === 'dos') {
+    for (const [g] of GROUPS) {
+      const names = S.idx.dos.items.filter(n => groupOf(n) === g);
+      if (!names.length) continue;
+      grid.append(h('div', { class: 'wg' }, g));
+      names.forEach(n => row('dos', n));
+    }
+  } else if (k === 'habits') S.idx.habits.items.forEach(n => row('habits', n));
+  else if (k === 'products') {
+    const ix = S.idx.products;
+    const months = new Set(days.map(d => MONTHS[parseKey(d).getMonth()]));
+    const planned = new Set([...months].flatMap(m => (S.data.sheets.buy?.months[m] || []).map(i => norm(i.product))));
+    const active = ix.items.filter(n => planned.has(norm(n)) || days.some(d => currentGrid('products', n, d)));
+    const rest = ix.items.filter(n => !active.includes(n));
+    if (active.length) { grid.append(h('div', { class: 'wg' }, 'Planned or bought this week')); active.forEach(n => row('products', n)); }
+    grid.append(h('div', { class: 'wg' }, 'All other products'));
+    rest.forEach(n => row('products', n));
+  } else if (k === 'period') {
+    grid.append(h('div', { class: 'wn' }, icon('droplet'), h('span', null, 'Period day')));
+    days.forEach(d => grid.append(cell(() => currentPeriod(d), on => setPeriod(d, on), () => d in S.pending.period,
+      S.idx.period.dateSet.has(d), `Period, ${fmtLong(d)}`, true)));
+  }
+  wrap.append(h('div', { class: 'wscroll' }, grid));
+  wrap.append(h('p', { class: 'sub', style: 'margin-top:12px' }, 'Tap circles to mark days. Changes across the week save together.'));
+  return wrap;
 }
 
 function updateSaveBar() {
   const n = pendingCount();
   $('#saveBar').hidden = n === 0;
-  $('#pendingText').textContent = plural(n, 'unsaved change');
+  const dcount = pendingDates().size;
+  $('#pendingText').textContent = plural(n, 'change') + (dcount > 1 ? ` on ${dcount} days` : '');
 }
 
-async function saveDay() {
-  const p = S.pending;
-  const payload = { date: S.logDate, grid: p.grid };
-  if (p.period !== undefined) payload.period = p.period;
-  if (p.weight !== undefined) payload.weight = p.weight === '' ? '' : Number(p.weight);
+async function saveAll() {
+  const p = S.pending, days = {};
+  const day = d => (days[d] ||= { date: d, grid: { products: {}, dos: {}, habits: {} } });
+  for (const k of ['products', 'dos', 'habits']) {
+    for (const [key, on] of Object.entries(p.grid[k])) day(key.slice(0, 10)).grid[k][key.slice(11)] = on;
+  }
+  for (const [d, on] of Object.entries(p.period)) day(d).period = on;
+  for (const [d, w] of Object.entries(p.weight)) day(d).weight = w === '' ? '' : Number(w);
+  const list = Object.values(days).sort((a, b) => a.date < b.date ? -1 : 1);
   const btn = $('#saveDayBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    await api('saveDay', payload);
-    if (!S.demo) applyLocal('saveDay', payload);
+    await api('saveDays', { days: list });
+    if (!S.demo) applyLocal('saveDays', { days: list });
     S.pending = freshPending();
     buildIndex();
     renderLog();
-    toast('Saved to your sheet ✓');
+    toast(list.length > 1 ? `Saved ${list.length} days` : 'Saved');
     if (!S.demo) loadSheet({ quiet: true });
   } catch (err) {
     toast(err.message, true);
   } finally {
     btn.disabled = false; btn.textContent = 'Save to sheet';
   }
-}
-
-function moveDay(n) {
-  if (pendingCount() && !confirm('Discard unsaved changes for this day?')) return;
-  S.pending = freshPending();
-  S.logDate = clampDate(addDays(S.logDate, n));
-  renderLog();
 }
 
 /* =========================================================
@@ -458,9 +618,7 @@ function defaultBuyMonth() {
   const months = S.data.sheets.buy?.months || {};
   return MONTHS.find(m => (months[m] || []).length) || MONTHS[parseKey(S.idx.first).getMonth()];
 }
-
 function monthKey(monthName) { return `${S.idx.year}-${pad(MONTHS.indexOf(monthName) + 1)}`; }
-
 function boughtInMonth(product, monthName) {
   const ix = S.idx.products;
   if (!ix) return null;
@@ -469,7 +627,6 @@ function boughtInMonth(product, monthName) {
   const ym = monthKey(monthName);
   return [...ix.sets[name]].filter(d => monthOf(d) === ym).sort()[0] || null;
 }
-
 function ensureDraft() {
   if (S.buyDraft && S.buyDraft.month === S.buyMonth) return;
   const items = (S.data.sheets.buy?.months[S.buyMonth] || []).map(i => ({ product: i.product, cost: i.cost ?? '' }));
@@ -478,59 +635,59 @@ function ensureDraft() {
 }
 
 function renderBuy() {
-  if (!S.data.sheets.buy) { $('#tab-buy [data-ready]').replaceChildren(h('p', { class: 'empty' }, 'No "Month List To buy" sheet in this file.')); return; }
+  if (!S.data.sheets.buy) { fill($('#tab-buy [data-ready]'), h('p', { class: 'empty' }, 'No "Month List To buy" sheet in this file.')); return; }
   ensureDraft();
   const months = S.data.sheets.buy.months;
-  $('#monthChips').replaceChildren(...MONTHS.map(m => h('button', {
+  fill($('#monthChips'), ...MONTHS.map(m => h('button', {
     class: 'chip', 'aria-pressed': String(m === S.buyMonth),
     onclick: () => {
       if (S.buyDirty && !confirm('Discard unsaved changes to ' + S.buyMonth + '?')) return;
       S.buyMonth = m; S.buyDraft = null; renderBuy();
     }
   }, m.slice(0, 3), (months[m] || []).length ? h('span', { class: 'dot', 'aria-label': 'has items' }) : null)));
-
   $('#buyMonthTitle').textContent = `${S.buyMonth} ${S.idx.year}`;
   const bi = $('#budgetInput');
   bi.value = S.buyDraft.budget;
   bi.oninput = () => { S.buyDraft.budget = bi.value; markBuyDirty(); renderBuySummary(); };
-
-  $('#productNames').replaceChildren(...(S.idx.products?.items || []).map(n => h('option', { value: n })));
-  const tbody = $('#buyRows');
-  tbody.replaceChildren(...S.buyDraft.items.map((it, i) => buyRow(it, i)));
-  if (!S.buyDraft.items.length) tbody.append(h('tr', null, h('td', { colspan: '5', class: 'muted', style: 'padding:18px 6px' }, 'Nothing planned yet. Add products below.')));
+  fill($('#productNames'), ...(S.idx.products?.items || []).map(n => h('option', { value: n })));
+  const rows = $('#buyRows');
+  fill(rows, ...S.buyDraft.items.map((it, i) => buyRow(it, i)));
+  if (!S.buyDraft.items.length) rows.append(h('div', { class: 'empty-row' }, `Nothing planned for ${S.buyMonth} yet. Add a product below.`));
   $('#buyDirty').hidden = !S.buyDirty;
   renderBuySummary();
 }
 
 function buyRow(it, i) {
-  const statusCell = h('td', { class: 'status' });
+  const statusCell = h('div', { class: 'status' });
+  const bic = h('div', { class: 'bic' }, icon(iconFor(it.product, 'products')));
+  const rowEl = h('div', { class: 'buy-row' });
   const drawStatus = () => {
-    statusCell.replaceChildren();
+    fill(statusCell, );
+    fill(bic, icon(iconFor(it.product, 'products')));
+    rowEl.classList.remove('bought');
     if (!it.product.trim()) return;
     const b = boughtInMonth(it.product, S.buyMonth);
     const known = S.idx.products?.items.some(n => norm(n) === norm(it.product));
     if (b) {
+      rowEl.classList.add('bought');
       statusCell.className = 'status bought';
-      statusCell.append('✓ Bought ' + fmt(b), ' ', h('button', { class: 'btn small ghost', title: 'Undo', onclick: () => doMarkBought(it.product, b, false) }, 'Undo'));
+      statusCell.append(icon('circle-check'), 'Bought ' + fmt(b), h('button', { class: 'btn small ghost', onclick: () => doMarkBought(it.product, b, false) }, 'Undo'));
       return;
     }
-    statusCell.className = 'status pending';
-    const t = todayKey();
-    const ym = monthKey(S.buyMonth);
+    statusCell.className = 'status';
+    const t = todayKey(), ym = monthKey(S.buyMonth);
     const def = monthOf(t) === ym ? t : clampDate(`${ym}-01`);
     const di = h('input', { type: 'date', value: def, min: S.idx.first, max: S.idx.last, 'aria-label': 'Bought on' });
-    statusCell.append(h('div', { class: 'buy-bought-form' }, di,
-      h('button', { class: 'btn small', onclick: () => doMarkBought(it.product, di.value, true) }, 'Mark bought')));
-    if (!known) statusCell.append(h('div', { class: 'new-tag', style: 'font-size:.75rem' }, 'new — will be added to Products'));
+    statusCell.append(h('div', { class: 'buy-bought-form' }, di, h('button', { class: 'btn small', onclick: () => doMarkBought(it.product, di.value, true) }, icon('check'), 'Bought')));
+    if (!known) statusCell.append(h('div', { class: 'new-tag' }, 'New — will be added to Products'));
   };
-  drawStatus();
-  return h('tr', null,
-    h('td', null, i + 1),
-    h('td', null, h('input', { class: 'p', list: 'productNames', value: it.product, placeholder: 'Product', oninput: e => { it.product = e.target.value; markBuyDirty(); drawStatus(); renderBuySummary(); } })),
-    h('td', { class: 'num' }, h('input', { class: 'c', type: 'number', min: '0', step: '1', value: it.cost, placeholder: '₹', oninput: e => { it.cost = e.target.value; markBuyDirty(); renderBuySummary(); } })),
+  rowEl.append(bic,
+    h('input', { class: 'p', list: 'productNames', value: it.product, placeholder: 'Product', 'aria-label': `Product ${i + 1}`, oninput: e => { it.product = e.target.value; markBuyDirty(); drawStatus(); renderBuySummary(); } }),
+    h('input', { class: 'c', type: 'number', min: '0', step: '1', inputmode: 'numeric', value: it.cost, placeholder: '₹', 'aria-label': 'Approx cost', oninput: e => { it.cost = e.target.value; markBuyDirty(); renderBuySummary(); } }),
     statusCell,
-    h('td', null, h('button', { class: 'remove', 'aria-label': 'Remove', onclick: () => { S.buyDraft.items.splice(i, 1); markBuyDirty(); renderBuy(); } }, '×'))
-  );
+    h('button', { class: 'remove', 'aria-label': 'Remove', onclick: () => { S.buyDraft.items.splice(i, 1); markBuyDirty(); renderBuy(); } }, icon('x')));
+  drawStatus();
+  return rowEl;
 }
 
 function markBuyDirty() { S.buyDirty = true; $('#buyDirty').hidden = false; }
@@ -542,7 +699,7 @@ async function doMarkBought(product, date, bought) {
     if (!S.demo) applyLocal('markBought', { product, date, bought });
     buildIndex();
     renderBuy();
-    toast(bought ? `${product} marked bought on ${fmt(date)} ✓` : 'Undone');
+    toast(bought ? `${product} marked bought on ${fmt(date)}` : 'Undone');
   } catch (err) { toast(err.message, true); }
 }
 
@@ -558,7 +715,7 @@ async function saveBuy() {
     S.buyDraft = null;
     buildIndex();
     renderBuy();
-    toast(`${d.month} list saved ✓`);
+    toast(`${d.month} list saved`);
   } catch (err) { toast(err.message, true); }
   finally { btn.disabled = false; btn.textContent = 'Save list'; }
 }
@@ -572,42 +729,59 @@ function renderBuySummary() {
   const budget = d.budget === '' ? null : Number(d.budget);
   const used = budget ? total / budget : 0;
   const over = budget !== null && total > budget;
-
-  // carry-over: planned in earlier months, never bought since that month
-  const mi = MONTHS.indexOf(d.month);
-  const carry = [];
-  const months = S.data.sheets.buy.months;
+  const mi = MONTHS.indexOf(d.month), carry = [], months = S.data.sheets.buy.months;
   for (let m = 0; m < mi; m++) {
     for (const it of months[MONTHS[m]] || []) {
       const ix = S.idx.products;
       const name = ix?.items.find(n => norm(n) === norm(it.product));
       const since = `${S.idx.year}-${pad(m + 1)}-01`;
       const everBought = name && [...ix.sets[name]].some(x => x >= since);
-      if (!everBought && !items.some(i => norm(i.product) === norm(it.product)) && !carry.some(c => norm(c.product) === norm(it.product))) {
-        carry.push({ ...it, from: MONTHS[m] });
-      }
+      if (!everBought && !items.some(i => norm(i.product) === norm(it.product)) && !carry.some(c => norm(c.product) === norm(it.product))) carry.push({ ...it, from: MONTHS[m] });
     }
   }
-
-  const box = $('#buySummary');
-  box.replaceChildren(...[
+  fill($('#buySummary'), ...[
     h('h2', null, 'Summary'),
     budget !== null ? h('div', null,
       h('div', { class: 'meter' + (over ? ' over' : '') }, h('span', { style: `width:${Math.min(100, used * 100).toFixed(1)}%` })),
-      h('p', { class: 'sub' }, over ? `Over budget by ${rupee(total - budget)}` : `${pct(used)} of budget planned · ${rupee(budget - total)} left`)
+      h('p', { class: 'sub' + (over ? ' down' : '') }, over ? `Over budget by ${rupee(total - budget)}` : `${pct(used)} of budget planned · ${rupee(budget - total)} left`)
     ) : h('p', { class: 'sub' }, 'Set a budget to track it.'),
     h('div', { class: 'kv' }, h('span', null, 'Planned items'), h('b', null, items.length)),
     h('div', { class: 'kv' }, h('span', null, 'Planned total'), h('b', null, rupee(total))),
     h('div', { class: 'kv' }, h('span', null, 'Budget'), h('b', null, rupee(budget))),
     h('div', { class: 'kv' }, h('span', null, `Bought (${boughtItems.length}/${items.length})`), h('b', null, rupee(boughtVal))),
     h('div', { class: 'kv' }, h('span', null, 'Still to buy'), h('b', null, rupee(total - boughtVal))),
-    carry.length ? h('div', { style: 'margin-top:16px' },
+    carry.length ? h('div', { style: 'margin-top:18px' },
       h('h3', null, 'Not bought from earlier months'),
-      h('ul', { class: 'insights', style: 'margin-top:8px' }, carry.slice(0, 8).map(c => h('li', null,
-        h('span', { style: 'flex:1' }, c.product, h('span', { class: 'muted' }, ` · ${c.from.slice(0, 3)}${c.cost ? ' · ' + rupee(c.cost) : ''}`)),
-        h('button', { class: 'btn small ghost', onclick: () => { S.buyDraft.items.push({ product: c.product, cost: c.cost ?? '' }); markBuyDirty(); renderBuy(); } }, '+ Add')
+      h('ul', { class: 'insights', style: 'margin-top:10px' }, carry.slice(0, 8).map(c => h('li', { style: 'align-items:center' },
+        h('span', { class: 'ico' }, icon(iconFor(c.product, 'products'))),
+        h('span', { style: 'flex:1;padding:0' }, c.product, h('span', { class: 'muted' }, ` · ${c.from.slice(0, 3)}${c.cost ? ' · ' + rupee(c.cost) : ''}`)),
+        h('button', { class: 'btn small ghost', onclick: () => { S.buyDraft.items.push({ product: c.product, cost: c.cost ?? '' }); markBuyDirty(); renderBuy(); } }, icon('plus'), 'Add')
       )))) : null
   ].filter(Boolean));
+}
+
+/* =========================================================
+ * SETTINGS — groups editor & theme
+ * ======================================================= */
+function renderGroupEditor() {
+  const box = $('#groupEditor');
+  if (!S.idx?.dos) return;
+  const groups = store.get('groups', {});
+  fill(box, ...S.idx.dos.items.map(n => h('div', { class: 'group-row' }, icon(iconFor(n, 'dos')), h('span', null, n),
+    h('select', {
+      'aria-label': `Group for ${n}`, onchange: e => {
+        const g = store.get('groups', {});
+        if (e.target.value === autoGroup(n)) delete g[n]; else g[n] = e.target.value;
+        store.set('groups', g);
+      }
+    }, GROUPS.map(([g]) => { const o = h('option', { value: g }, g); if ((groups[n] || autoGroup(n)) === g) o.selected = true; return o; })))));
+}
+
+const THEMES = ['auto', 'light', 'dark'];
+function applyTheme(t) {
+  if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  $$('[data-theme-label]').forEach(e => { e.textContent = 'Theme: ' + t; });
+  store.set('theme', t === 'auto' ? null : t);
 }
 
 /* =========================================================
@@ -861,14 +1035,15 @@ function renderAnalysis() {
   const sel = $('#rangeSelect');
   const ms = [...new Set(rangeDays(S.idx.first, S.idx.last).map(monthOf))];
   const opts = [['all', 'All tracked'], ['last30', 'Last 30 days'], ['last7', 'Last 7 days'], ...ms.map(m => [m, monthLabel(m)])];
-  sel.replaceChildren(...opts.map(([v, l]) => h('option', { value: v }, l)));
+  fill(sel, ...opts.map(([v, l]) => h('option', { value: v }, l)));
   sel.value = S.range;
   sel.onchange = () => { S.range = sel.value; renderAnalysis(); };
-  $('#analysisPills').replaceChildren(...VIEWS.map(([v, l]) => h('button', { class: 'chip', 'aria-pressed': String(S.view === v), onclick: () => { S.view = v; renderAnalysis(); } }, l)));
+  fill($('#analysisPills'), ...VIEWS.map(([v, l]) => h('button', { class: 'chip', 'aria-pressed': String(S.view === v), onclick: () => { S.view = v; renderAnalysis(); } }, l)));
 
   const body = $('#analysisBody');
-  body.replaceChildren();
+  fill(body, );
   const win = analysisWindow();
+  $('#analysisSub').textContent = windowLabel(win);
   const fn = { overview: viewOverview, dos: (w, b) => viewGrid('dos', w, b), habits: (w, b) => viewGrid('habits', w, b), period: viewPeriod, weight: viewWeight, spending: viewSpending }[S.view];
   fn(win, body);
 }
@@ -882,8 +1057,17 @@ function deltaText(cur, prev, unit = 'pts') {
   if (Math.abs(d) < 0.5) return ['≈ same as previous period', ''];
   return [`${d > 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(0)} ${unit} vs previous period`, d > 0 ? 'up' : 'down'];
 }
+const INSIGHT_ICONS = {
+  '🏆': ['trophy'], '💤': ['zzz', 'warn'], '📈': ['trending-up'], '📉': ['trending-down', 'bad'], '🔑': ['key'], '📝': ['pencil', 'warn'],
+  '🩸': ['droplet', 'pink'], '⚠️': ['alert-triangle', 'warn'], '🛒': ['shopping-cart'], '⚖️': ['scale'], '✨': ['sparkles'], '📅': ['calendar'],
+  '🌸': ['flower', 'pink'], '🔻': ['arrow-down', 'bad'], '🔺': ['arrow-up'], 'ℹ️': ['info-circle'], '🔴': ['alert-circle', 'bad'],
+  '✅': ['circle-check'], '🟡': ['clock', 'warn'], '🛍️': ['shopping-bag', 'warn'], '🔁': ['repeat'], '💸': ['cash']
+};
 function insightList(items) {
-  return h('ul', { class: 'insights' }, items.filter(Boolean).map(([ico, text]) => h('li', null, h('span', { class: 'ico' }, ico), h('span', null, text))));
+  return h('ul', { class: 'insights' }, items.filter(Boolean).map(([ico, text]) => {
+    const [name, tone] = INSIGHT_ICONS[ico] || ['point'];
+    return h('li', null, h('span', { class: 'ico ' + (tone || '') }, icon(name)), h('span', null, text));
+  }));
 }
 function windowLabel([s, e]) { return `${fmt(s)} – ${fmt(e)}`; }
 
@@ -1002,7 +1186,7 @@ function viewGrid(k, win, body) {
           h('td', { class: 'name' }, r.name),
           h('td', null, r.done),
           h('td', null, h('div', { class: 'bar-cell' }, h('div', { class: 'bar' }, h('span', { style: `width:${((r.rate || 0) * 100).toFixed(1)}%` })), pct(r.rate))),
-          h('td', null, r.current ? `🔥 ${r.current}` : '—'),
+          h('td', null, r.current ? h('span', { class: 'tag good' }, icon('flame'), ' ', r.current) : '—'),
           h('td', null, r.longest || '—'),
           h('td', null, trendTag(r.trend)),
           h('td', null, bd && bd[0] > 0 ? DOW[bd[1]] : '—'),
@@ -1299,19 +1483,18 @@ function init() {
   $('#scriptUrl').value = S.settings.scriptUrl;
   $('#passcode').value = S.settings.passcode;
 
-  $$('.tabs button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+  $$('.nav-btn').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+  applyTheme(store.get('theme', null) || 'auto');
+  $$('[data-theme-toggle]').forEach(b => b.addEventListener('click', () => {
+    const cur = document.documentElement.dataset.theme || 'auto';
+    applyTheme(THEMES[(THEMES.indexOf(cur) + 1) % 3]);
+    if (S.data && S.tab === 'analysis') renderAnalysis();
+  }));
+  $$('.seg button').forEach(b => b.addEventListener('click', () => { S.mode = b.dataset.mode; renderLog(); }));
   $('#sheetForm').addEventListener('submit', e => { e.preventDefault(); S.demo = false; loadSheet(); });
 
-  $('#logDate').addEventListener('change', e => {
-    if (!e.target.value) return;
-    if (pendingCount() && !confirm('Discard unsaved changes for this day?')) { e.target.value = S.logDate; return; }
-    S.pending = freshPending(); S.logDate = clampDate(e.target.value); renderLog();
-  });
-  $('#prevDay').addEventListener('click', () => moveDay(-1));
-  $('#nextDay').addEventListener('click', () => moveDay(1));
-  $('#todayBtn').addEventListener('click', () => moveDay(diffDays(S.logDate, todayKey())));
   $('#discardBtn').addEventListener('click', () => { S.pending = freshPending(); renderLog(); });
-  $('#saveDayBtn').addEventListener('click', saveDay);
+  $('#saveDayBtn').addEventListener('click', saveAll);
 
   $('#addBuyRow').addEventListener('click', () => { S.buyDraft.items.push({ product: '', cost: '' }); markBuyDirty(); renderBuy(); const ins = $$('#buyRows input.p'); ins[ins.length - 1]?.focus(); });
   $('#saveBuyBtn').addEventListener('click', saveBuy);

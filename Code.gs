@@ -49,6 +49,7 @@ function doPost(e) {
       switch (req.action) {
         case 'read':         result = readAll_(ss); break;
         case 'saveDay':      result = saveDay_(ss, req); break;
+        case 'saveDays':     result = saveDays_(ss, req); break;
         case 'saveBuyList':  result = saveBuyList_(ss, req); break;
         case 'markBought':   result = markBought_(ss, req); break;
         default: throw new Error('Unknown action: ' + req.action);
@@ -344,6 +345,15 @@ function saveDay_(ss, req) {
     changed++;
   }
   return { changed: changed };
+}
+
+/** req: { days: [ <saveDay request>, … ] } — several dates in one call (week view) */
+function saveDays_(ss, req) {
+  var days = req.days || [];
+  if (days.length > 62) throw new Error('Too many days in one save.');
+  var changed = 0;
+  days.forEach(function (d) { changed += saveDay_(ss, d).changed; });
+  return { changed: changed, days: days.length };
 }
 
 /** req: { month:'October', items:[{product, cost}], budget: number|''|undefined } */

@@ -2,134 +2,165 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0F6E56">
   <title>Life Tracker</title>
   <meta name="description" content="Log daily dos, habits, products, period and weight to a Google Sheet, and see in-depth analysis.">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌸</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%231D9E75'/><path d='M28 52l14 14 30-32' stroke='white' stroke-width='10' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+  <script>
+    // apply saved theme before paint
+    try { const t = JSON.parse(localStorage.getItem('lt.theme')); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons-outline.min.css">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
-  <header class="topbar">
+<div class="app">
+  <nav class="nav" aria-label="Sections">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true">🌸</span>
+      <span class="logo" aria-hidden="true"><i class="ti ti-check"></i></span>
       <div>
-        <h1>Life Tracker</h1>
-        <p class="sheet-title" id="sheetTitle">No sheet loaded</p>
+        <div class="brand-name">Life Tracker</div>
+        <div class="sheet-title" data-sheet-title>No sheet loaded</div>
       </div>
     </div>
-    <form class="sheet-form" id="sheetForm" autocomplete="off">
-      <label for="sheetUrl" class="sr-only">Google Sheet link</label>
-      <input id="sheetUrl" list="recentSheets" placeholder="Paste your Google Sheet link…" required>
-      <datalist id="recentSheets"></datalist>
-      <button type="submit" class="btn primary" id="loadBtn">Load</button>
-    </form>
-  </header>
-
-  <nav class="tabs" role="tablist" aria-label="Sections">
-    <button role="tab" data-tab="log" aria-selected="true">📝 Log a day</button>
-    <button role="tab" data-tab="buy" aria-selected="false">🛒 Buy list</button>
-    <button role="tab" data-tab="analysis" aria-selected="false">📊 Analysis</button>
-    <button role="tab" data-tab="settings" aria-selected="false">⚙️ Settings</button>
+    <div class="nav-items" role="tablist">
+      <button class="nav-btn" role="tab" data-tab="log" aria-selected="true"><i class="ti ti-checkbox" aria-hidden="true"></i><span>Today</span></button>
+      <button class="nav-btn" role="tab" data-tab="buy" aria-selected="false"><i class="ti ti-shopping-cart" aria-hidden="true"></i><span>Buy list</span></button>
+      <button class="nav-btn" role="tab" data-tab="analysis" aria-selected="false"><i class="ti ti-chart-bar" aria-hidden="true"></i><span>Insights</span></button>
+      <button class="nav-btn" role="tab" data-tab="settings" aria-selected="false"><i class="ti ti-settings" aria-hidden="true"></i><span>Settings</span></button>
+    </div>
+    <div class="nav-foot">
+      <button class="theme-btn" data-theme-toggle><i class="ti ti-sun-moon" aria-hidden="true"></i><span data-theme-label>Theme: auto</span></button>
+    </div>
   </nav>
 
-  <main>
-    <div id="banner" class="banner" hidden></div>
-
-    <!-- LOG -->
-    <section id="tab-log" class="tab-panel" role="tabpanel">
-      <div class="empty" data-empty>Load your sheet to start logging.</div>
-      <div data-ready hidden>
-        <div class="date-nav">
-          <button class="btn icon" id="prevDay" aria-label="Previous day">‹</button>
-          <input type="date" id="logDate">
-          <button class="btn icon" id="nextDay" aria-label="Next day">›</button>
-          <button class="btn ghost" id="todayBtn">Today</button>
-          <span class="date-label" id="dateLabel"></span>
+  <div class="main">
+    <header class="top">
+      <div class="top-brand">
+        <span class="logo" aria-hidden="true"><i class="ti ti-check"></i></span>
+        <div>
+          <div class="brand-name">Life Tracker</div>
+          <div class="sheet-title" data-sheet-title>No sheet loaded</div>
         </div>
-        <div class="log-grid" id="logGrid"></div>
-        <div class="savebar" id="saveBar" hidden>
-          <span id="pendingText"></span>
-          <button class="btn ghost" id="discardBtn">Discard</button>
-          <button class="btn primary" id="saveDayBtn">Save to sheet</button>
-        </div>
+        <button class="icon-btn" data-theme-toggle aria-label="Change theme"><i class="ti ti-sun-moon"></i></button>
       </div>
-    </section>
+      <form class="sheet-form" id="sheetForm" autocomplete="off">
+        <i class="ti ti-link" aria-hidden="true"></i>
+        <label for="sheetUrl" class="sr-only">Google Sheet link</label>
+        <input id="sheetUrl" list="recentSheets" placeholder="Paste your Google Sheet link" required>
+        <datalist id="recentSheets"></datalist>
+        <button type="submit" class="btn primary" id="loadBtn">Load</button>
+      </form>
+    </header>
 
-    <!-- BUY LIST -->
-    <section id="tab-buy" class="tab-panel" role="tabpanel" hidden>
-      <div class="empty" data-empty>Load your sheet to plan purchases.</div>
-      <div data-ready hidden>
-        <div class="month-chips" id="monthChips"></div>
-        <div class="buy-layout">
-          <div class="card">
-            <div class="card-head">
-              <h2 id="buyMonthTitle">Month</h2>
-              <label class="budget-field">Budget ₹
-                <input type="number" min="0" step="50" id="budgetInput" placeholder="—">
-              </label>
+    <main>
+      <div id="banner" class="banner" hidden></div>
+
+      <!-- TODAY -->
+      <section id="tab-log" class="tab-panel" role="tabpanel">
+        <div class="empty" data-empty><i class="ti ti-link"></i><p>Paste your sheet link above to start.</p></div>
+        <div data-ready hidden>
+          <div class="log-head">
+            <div>
+              <h1 id="dateLabel">Today</h1>
+              <p class="sub" id="dateSub"></p>
             </div>
-            <div class="buy-table-wrap">
-              <table class="buy-table">
-                <thead><tr><th>#</th><th>Product</th><th class="num">Approx cost ₹</th><th>Status</th><th></th></tr></thead>
-                <tbody id="buyRows"></tbody>
-              </table>
-            </div>
-            <datalist id="productNames"></datalist>
-            <div class="row-actions">
-              <button class="btn ghost" id="addBuyRow">+ Add product</button>
-              <span class="spacer"></span>
-              <span class="dirty-note" id="buyDirty" hidden>Unsaved changes</span>
-              <button class="btn primary" id="saveBuyBtn">Save list</button>
+            <div class="seg" role="group" aria-label="View">
+              <button data-mode="day" aria-pressed="true"><i class="ti ti-layout-grid" aria-hidden="true"></i>Day</button>
+              <button data-mode="week" aria-pressed="false"><i class="ti ti-calendar-week" aria-hidden="true"></i>Week</button>
             </div>
           </div>
-          <aside class="card" id="buySummary"></aside>
+          <div class="week-strip" id="weekStrip"></div>
+          <div id="logBody"></div>
+          <div class="savebar" id="saveBar" hidden>
+            <span id="pendingText"></span>
+            <button class="btn ghost" id="discardBtn">Discard</button>
+            <button class="btn primary" id="saveDayBtn">Save to sheet</button>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ANALYSIS -->
-    <section id="tab-analysis" class="tab-panel" role="tabpanel" hidden>
-      <div class="empty" data-empty>Load your sheet to see the analysis.</div>
-      <div data-ready hidden>
-        <div class="analysis-bar">
+      <!-- BUY LIST -->
+      <section id="tab-buy" class="tab-panel" role="tabpanel" hidden>
+        <div class="empty" data-empty><i class="ti ti-shopping-cart"></i><p>Load your sheet to plan purchases.</p></div>
+        <div data-ready hidden>
+          <div class="log-head"><div><h1>Buy list</h1><p class="sub">Plan each month and tick items off as you buy them</p></div></div>
+          <div class="month-chips" id="monthChips"></div>
+          <div class="buy-layout">
+            <div class="card">
+              <div class="card-head">
+                <h2 id="buyMonthTitle">Month</h2>
+                <label class="budget-field">Budget ₹
+                  <input type="number" min="0" step="50" id="budgetInput" placeholder="0" inputmode="numeric">
+                </label>
+              </div>
+              <div id="buyRows" class="buy-rows"></div>
+              <datalist id="productNames"></datalist>
+              <div class="row-actions">
+                <button class="btn ghost" id="addBuyRow"><i class="ti ti-plus" aria-hidden="true"></i> Add product</button>
+                <span class="spacer"></span>
+                <span class="dirty-note" id="buyDirty" hidden>Unsaved changes</span>
+                <button class="btn primary" id="saveBuyBtn">Save list</button>
+              </div>
+            </div>
+            <aside class="card" id="buySummary"></aside>
+          </div>
+        </div>
+      </section>
+
+      <!-- ANALYSIS -->
+      <section id="tab-analysis" class="tab-panel" role="tabpanel" hidden>
+        <div class="empty" data-empty><i class="ti ti-chart-bar"></i><p>Load your sheet to see insights.</p></div>
+        <div data-ready hidden>
+          <div class="log-head"><div><h1>Insights</h1><p class="sub" id="analysisSub"></p></div>
+            <label class="range-field"><i class="ti ti-calendar" aria-hidden="true"></i><span class="sr-only">Period</span>
+              <select id="rangeSelect"></select>
+            </label>
+          </div>
           <div class="pills" id="analysisPills"></div>
-          <label class="range-field">Period
-            <select id="rangeSelect"></select>
-          </label>
+          <div id="analysisBody"></div>
         </div>
-        <div id="analysisBody"></div>
-      </div>
-    </section>
+      </section>
 
-    <!-- SETTINGS -->
-    <section id="tab-settings" class="tab-panel" role="tabpanel" hidden>
-      <div class="card settings">
-        <h2>Connection</h2>
-        <p class="muted">These stay in this browser only. The sheet link is pasted at the top each time.</p>
-        <label>Apps Script web app URL
-          <input id="scriptUrl" placeholder="https://script.google.com/macros/s/…/exec">
-        </label>
-        <label>Passcode
-          <input id="passcode" type="password" placeholder="The PASSCODE you set in Script properties">
-        </label>
-        <div class="row-actions">
-          <button class="btn primary" id="saveSettings">Save &amp; test</button>
-          <button class="btn ghost" id="forgetSettings">Forget on this device</button>
-          <span id="settingsStatus" class="muted"></span>
+      <!-- SETTINGS -->
+      <section id="tab-settings" class="tab-panel" role="tabpanel" hidden>
+        <div class="log-head"><div><h1>Settings</h1><p class="sub">Saved in this browser only</p></div></div>
+        <div class="settings-grid">
+          <div class="card settings">
+            <h2>Connection</h2>
+            <label>Apps Script web app URL
+              <input id="scriptUrl" placeholder="https://script.google.com/macros/s/…/exec">
+            </label>
+            <label>Passcode
+              <input id="passcode" type="password" placeholder="The PASSCODE in Script properties">
+            </label>
+            <div class="row-actions">
+              <button class="btn primary" id="saveSettings">Save and test</button>
+              <button class="btn ghost" id="forgetSettings">Forget on this device</button>
+            </div>
+            <p id="settingsStatus" class="sub"></p>
+          </div>
+          <div class="card settings">
+            <h2>Daily Dos groups</h2>
+            <p class="sub">Choose when each item belongs. Picked automatically from the name until you change it.</p>
+            <div id="groupEditor" class="group-editor"><p class="sub">Load your sheet to edit groups.</p></div>
+          </div>
+          <div class="card settings">
+            <h2>Try it first</h2>
+            <p class="sub">See every screen with made-up data. Nothing is sent anywhere.</p>
+            <div class="row-actions"><button class="btn ghost" id="demoBtn"><i class="ti ti-sparkles" aria-hidden="true"></i> Load demo data</button></div>
+          </div>
         </div>
-        <hr>
-        <h2>Try it first</h2>
-        <p class="muted">Explore every screen with made-up data. Nothing is sent anywhere.</p>
-        <button class="btn ghost" id="demoBtn">Load demo data</button>
-      </div>
-    </section>
-  </main>
-
-  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

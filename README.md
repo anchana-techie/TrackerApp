@@ -57,14 +57,18 @@ GitHub Pages site  ──(sheet link + passcode)──▶  Apps Script web app  
 
 1. Paste your Google Sheet link (the normal `https://docs.google.com/spreadsheets/d/…/edit` link) at the top → **Load**.
    Recent links are remembered in the dropdown. You can also bookmark `…/life-tracker/?sheet=<your sheet link>`.
-2. **📝 Log a day** — pick a date, tick Daily Dos, Habits and products bought, toggle a period day, type your weight → **Save to sheet**. Only the cells you changed are written (`X` under that date, the weight in its row).
-   New products typed in "Bought today" are added as a new row at the bottom of the Products sheet.
-3. **🛒 Buy list** — choose a month, add products (suggestions come from your Products list, or type a new one), approx cost, and a monthly budget → **Save list**.
+2. **Today** — tap a tile to mark it done (tap again to undo). Tiles are grouped into **Morning / Daytime / Evening** (Daily Dos), **Habits**, **Body** (period day + weight) and **Bought today** (this month's buy list first; search to find any product, or add a new one).
+   - The week strip at the top jumps between days; each day's ring shows how much you ticked.
+   - Switch **Day ↔ Week** to edit a whole week at once in a grid (Daily Dos, Habits, Products, Period).
+   - Changes are collected (orange dots) and written together with **Save to sheet**, even across several days.
+   - New products are added as a new row at the bottom of the Products sheet.
+   - Groups are picked from the item name; change any of them in **Settings → Daily Dos groups** (saved per browser).
+3. **Buy list** — choose a month, add products (suggestions come from your Products list, or type a new one), approx cost, and a monthly budget → **Save list**.
    - Items fill `Product-1 / Cost`, `Product-2 / Cost`, … in that month's row. If you add more than 11, new `Product-12 / Cost` columns are added automatically.
    - **Mark bought** puts an `X` in Products on the date you choose. "Bought" status is read back from Products, so ticking it on the Log page counts too.
    - The budget is saved in a small **Buy Settings** sheet (created automatically the first time you set one).
    - Items from earlier months that were never bought show up as "Not bought from earlier months" with a one-click **+ Add**.
-4. **📊 Analysis** — choose a view and a period (All tracked, last 30/7 days, or a month):
+4. **Insights** — choose a view and a period (All tracked, last 30/7 days, or a month):
    - **Overview:** completion vs previous period, best streak, next period, weight change, this month's spend, and the main things that stand out.
    - **Daily Dos / Habits:** completion over time with a 7-day average, day-of-week pattern, per-item rate / streaks / trend / best day / last done, a day-by-day heat map, *keystone* items (days you do X, you do more of everything else), weekend vs weekday, and period-day effect.
    - **Period cycle:** detected periods and cycle lengths, spotting kept separate from new cycles, next-period prediction with a ± window, estimated fertile window, today's cycle day and phase, irregularity flags, how habits and weight change by phase.
@@ -72,6 +76,8 @@ GitHub Pages site  ──(sheet link + passcode)──▶  Apps Script web app  
    - **Spending & restock:** budget vs planned vs bought per month, over-budget warnings, unplanned purchases, repeat items, biggest planned items, and a restock tracker (average gap between purchases → next expected date → overdue / due soon).
 
 **Try it first:** Settings → *Load demo data* shows every screen with made-up numbers. Nothing is sent anywhere.
+
+**Theme:** the sun/moon button switches between auto, light and dark.
 
 ### How "logged days" work
 A day with nothing ticked on a sheet is treated as **not logged**, not as "all missed", so forgetting to fill a day doesn't drag your percentages down. The heat map shows those days with a dashed outline.
