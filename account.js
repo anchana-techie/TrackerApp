@@ -25,7 +25,7 @@ const Account = (() => {
     const snap = await db.doc('members/' + user.uid).get();
     if (!snap.exists) return null;
     const d = snap.data();
-    return { uid: user.uid, email: user.email, userName: d.userName, role: d.role || 'user' };
+    return { uid: user.uid, email: user.email, userName: d.userName, role: d.role || 'user', gender: d.gender || '' };
   }
 
   async function emit(user) {
@@ -60,8 +60,9 @@ const Account = (() => {
     },
 
     /** Invite-only: the email must already be in /invites. Rolls the new login back if anything fails. */
-    async register({ userName, email, password }) {
+    async register({ userName, email, password, gender }) {
       email = lower(email); userName = String(userName || '').trim();
+      if (!['female', 'male', 'other'].includes(gender)) throw new Error('Please select a gender.');
       if (!/^[A-Za-z0-9_-]{3,30}$/.test(userName)) throw new Error('Username: 3–30 letters, numbers, _ or -, no spaces.');
       busy = true;
       let cred;
@@ -75,7 +76,7 @@ const Account = (() => {
           const batch = db.batch();
           batch.set(db.doc('usernames/' + userName.toLowerCase()), { uid: cred.user.uid });
           batch.set(db.doc('members/' + cred.user.uid), {
-            userName, email, role: 'user', createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            userName, email, gender, role: 'user', createdAt: firebase.firestore.FieldValue.serverTimestamp()
           });
           await batch.commit();
         } catch (e) {

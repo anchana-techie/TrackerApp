@@ -46,6 +46,15 @@
       <p class="sub">Registration is by invitation. Use the email address the admin invited.</p>
       <label>Username <input id="regUserName" autocomplete="username" minlength="3" maxlength="30" pattern="[A-Za-z0-9_\-]{3,30}" required></label>
       <p class="sub">Cannot be changed later. Letters, numbers, _ and - only.</p>
+      <label>Gender
+        <select id="regGender" required>
+          <option value="" selected disabled>Select…</option>
+          <option value="female">Female</option>
+          <option value="male">Male</option>
+          <option value="other">Other</option>
+        </select>
+      </label>
+      <p class="sub">Cannot be changed later. Period tracking and analysis are hidden for male accounts.</p>
       <label>Email <input type="email" id="regEmail" autocomplete="email" required></label>
       <label>Password <input type="password" id="regPassword" autocomplete="new-password" minlength="8" required></label>
       <label>Confirm password <input type="password" id="regPassword2" autocomplete="new-password" minlength="8" required></label>

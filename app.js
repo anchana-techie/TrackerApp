@@ -174,6 +174,7 @@ async function loadSheet({ quiet = false } = {}) {
   if (!quiet) document.body.classList.add('loading');
   try {
     const data = await api('read');
+    if (hidesPeriod()) data.sheets.period = null;   // male accounts: no period tracking or analysis
     S.data = data;
     buildIndex();
     S.readOnly = !S.demo && S.viewUid !== S.user.uid;
@@ -227,7 +228,7 @@ function clampDate(k) {
 
 function showBanner() {
   const b = $('#banner');
-  const missing = ['products', 'dos', 'habits', 'period', 'weight', 'buy'].filter(k => !S.data.sheets[k]);
+  const missing = ['products', 'dos', 'habits', 'period', 'weight', 'buy'].filter(k => !S.data.sheets[k] && !(k === 'period' && hidesPeriod()));
   if (S.demo) {
     b.className = 'banner info'; b.hidden = false;
     b.textContent = 'Demo mode — made-up data, changes stay in this tab. Pick a year above and press Load to go back to your tracker.';
@@ -1010,6 +1011,8 @@ const VIEWS = [
   ['period', 'Period cycle'], ['weight', 'Weight'], ['spending', 'Spending & restock']
 ];
 
+const views = () => VIEWS.filter(([v]) => !(v === 'period' && hidesPeriod()));
+
 function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
 function destroyCharts() { S.charts.forEach(c => c.destroy()); S.charts = []; }
 
@@ -1041,7 +1044,8 @@ function renderAnalysis() {
   fill(sel, ...opts.map(([v, l]) => h('option', { value: v }, l)));
   sel.value = S.range;
   sel.onchange = () => { S.range = sel.value; renderAnalysis(); };
-  fill($('#analysisPills'), ...VIEWS.map(([v, l]) => h('button', { class: 'chip', 'aria-pressed': String(S.view === v), onclick: () => { S.view = v; renderAnalysis(); } }, l)));
+  if (!views().some(([v]) => v === S.view)) S.view = 'overview';
+  fill($('#analysisPills'), ...views().map(([v, l]) => h('button', { class: 'chip', 'aria-pressed': String(S.view === v), onclick: () => { S.view = v; renderAnalysis(); } }, l)));
 
   const body = $('#analysisBody');
   fill(body, );
@@ -1482,7 +1486,11 @@ function makeDemoData() {
 /* =========================================================
  * ACCOUNT — sign in, years, upload, admin
  * ======================================================= */
-const confirmDiscard = () => !(pendingCount() || S.buyDirty) || confirm('Discard unsaved changes?');
+/** Gender of whoever is on screen (the admin can be looking at someone else). */
+const viewedGender = () => (S.viewUid === S.user?.uid ? S.user : S.members.find(m => m.uid === S.viewUid))?.gender || '';
+const hidesPeriod = () => viewedGender() === 'male';
+
+const confirmDiscard =() => !(pendingCount() || S.buyDirty) || confirm('Discard unsaved changes?');
 
 function setAuthMsg(msg, isErr = true) {
   const m = $('#authMsg');
@@ -1677,7 +1685,7 @@ function init() {
     e.preventDefault();
     if ($('#regPassword').value !== $('#regPassword2').value) return setAuthMsg('The two passwords do not match.');
     setAuthMsg('Creating your account…', false);
-    try { await Account.register({ userName: $('#regUserName').value, email: $('#regEmail').value, password: $('#regPassword').value }); }
+    try { await Account.register({ userName: $('#regUserName').value, gender: $('#regGender').value, email: $('#regEmail').value, password: $('#regPassword').value }); }
     catch (err) { setAuthMsg(err.message); }
   });
   $('#pwForm').addEventListener('submit', async e => {

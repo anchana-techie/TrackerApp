@@ -33,7 +33,7 @@ Browser (GitHub Pages)
 
 | Collection | Document id | Fields |
 |---|---|---|
-| `members` (registration) | Firebase user id | `userName`, `email`, `role` (`user` / `admin`), `createdAt` |
+| `members` (registration) | Firebase user id | `userName`, `email`, `gender` (`female` / `male` / `other`), `role` (`user` / `admin`), `createdAt` |
 | `document_link` (fact table) | `<userId>_<year>` | `userId`, `userName`, `year`, `driveFileId`, `driveLink`, `uploadedAt` |
 | `invites` | the email (lower-case) | `email`, `invitedAt` |
 | `usernames` | lower-cased username | `uid` (reserves the name) |

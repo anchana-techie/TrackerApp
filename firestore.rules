@@ -34,7 +34,8 @@ service cloud.firestore {
       allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow create: if signedIn()
         && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly(['userName', 'email', 'role', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['userName', 'email', 'gender', 'role', 'createdAt'])
+        && request.resource.data.gender in ['female', 'male', 'other']
         && request.resource.data.role == 'user'                       // admin is set by hand in the console
         && request.resource.data.email == myEmail()
         && request.resource.data.userName.matches('^[A-Za-z0-9_-]{3,30}$')
