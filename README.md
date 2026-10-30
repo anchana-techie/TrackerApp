@@ -10,6 +10,8 @@ Browser (GitHub Pages)
                             └─ verifies the token, reads Firestore as that user, writes document_link
 ```
 
+> 📚 **Architecture diagrams, data model, features and changelog:** see the [`Documentation/`](Documentation/README.md) folder.
+
 ## What's in the folder
 
 | File | What it is |

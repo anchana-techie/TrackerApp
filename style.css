@@ -399,3 +399,7 @@ body.readonly #logBody, body.readonly #buyRows, body.readonly #addBuyRow, body.r
 .hello-text { font-size: .95rem; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hello-text b { color: var(--ink); }
 @media (max-width: 860px) { .hello { padding: 12px 16px 0; } }
+
+/* dropdown lists: the browser draws them on its own background, so set both colours (fixes light-on-white in dark theme) */
+select { color-scheme: light dark; }
+select option { background: var(--surface); color: var(--ink); }
