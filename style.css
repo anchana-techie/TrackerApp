@@ -393,3 +393,9 @@ main { max-width: 1180px; margin: 0 auto; padding: 22px 32px 120px; }
 /* ---------- read-only (admin viewing someone else) ---------- */
 body.readonly .savebar { display: none !important; }
 body.readonly #logBody, body.readonly #buyRows, body.readonly #addBuyRow, body.readonly #saveBuyBtn, body.readonly #budgetInput { pointer-events: none; opacity: .75; }
+
+/* ---------- greeting bar ---------- */
+.hello { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 32px 0; max-width: 1180px; margin: 0 auto; }
+.hello-text { font-size: .95rem; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hello-text b { color: var(--ink); }
+@media (max-width: 860px) { .hello { padding: 12px 16px 0; } }

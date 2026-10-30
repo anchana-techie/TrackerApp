@@ -1516,7 +1516,8 @@ async function onAuthChange(profile, msg) {
   S.user = profile; S.viewUid = profile.uid;
   $('#authScreen').hidden = true; $('#appRoot').hidden = false; setAuthMsg('');
   $$('[data-user-label]').forEach(e => { e.textContent = profile.userName + (profile.role === 'admin' ? ' · admin' : ''); });
-  $('#accountInfo').textContent = `Signed in as ${profile.userName} (${profile.email})`;
+  $$('[data-hello]').forEach(e => { e.textContent = profile.userName; });
+  $('#accountInfo').textContent =`Signed in as ${profile.userName} (${profile.email})`;
   const admin = profile.role === 'admin';
   $('#navAdmin').hidden = !admin;
   S.members = [];
@@ -1687,7 +1688,7 @@ function init() {
     try { await Account.changePassword($('#pwCur').value, $('#pwNew').value); e.target.reset(); st.textContent = '✓ Password changed'; toast('Password changed'); }
     catch (err) { st.textContent = '✗ ' + err.message; }
   });
-  $('#signOutBtn').addEventListener('click', () => { if (confirmDiscard()) Account.signOut(); });
+  $$('#signOutBtn, #topSignOut').forEach(b => b.addEventListener('click', () => { if (confirmDiscard()) Account.signOut(); }));
   $('#uploadForm').addEventListener('submit', doUpload);
   $('#inviteForm').addEventListener('submit', async e => {
     e.preventDefault();

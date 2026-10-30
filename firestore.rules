@@ -49,7 +49,10 @@ service cloud.firestore {
     // Browsers can read their own rows, never create or edit them — so nobody can point a row
     // at someone else's file. The admin may delete a row to clear a wrong upload.
     match /document_link/{id} {
-      allow read: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      // get is decided by the id ("<uid>_<year>") so that asking for a row that does not exist yet
+      // answers "not found" instead of "denied"; list (the year picker) is decided by the row's userId
+      allow get: if signedIn() && (isAdmin() || id.matches(request.auth.uid + '_[0-9]{4}'));
+      allow list: if signedIn() && (isAdmin() || resource.data.userId == request.auth.uid);
       allow create, update: if false;
       allow delete: if isAdmin();
     }
